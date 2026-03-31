@@ -27,11 +27,11 @@ module Homebrew
                description: "Print detailed progress and subprocess failures."
         switch "-o", "--offline",
                description: "Use only local taps and cached metadata; do not fetch from the network."
-        comma_array "--tap=TAP[,TAP...]",
+        comma_array "--tap=",
                     description: "Restrict results to the specified tap or comma-separated taps."
-        flag "-n", "--count=COUNT",
+        flag "-n", "--count=",
              description: "Number of entries to show for each selected type."
-        flag "--width=WIDTH",
+        flag "--width=",
              description: "Target table width. Defaults to $COLUMNS or 140."
       end
 
