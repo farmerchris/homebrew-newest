@@ -41,6 +41,13 @@ This repository implements the `brew newest` external command.
   - initial clone uses depth 200
   - existing cache refresh uses plain `git fetch` and preserves current depth
   - deepening increases by 200 at a time up to max depth 2000
+- Offline performance strategy:
+  - share `brew tap` and `brew --repo` lookups across formula/cask work instead of recomputing them per thread
+  - cache shallow-boundary commit sets per repo
+  - resolve git dirs from `.git` metadata when possible instead of spawning `git rev-parse`
+  - skip local `git log` when the relevant `Formula/` or `Casks/` directory is absent
+  - scan local taps with a small worker pool (`LOCAL_SCAN_WORKERS = 4`)
+  - in `--offline`, stream rows directly from cached metadata and stop once the requested count is printed
 
 ## Maintenance Rule
 

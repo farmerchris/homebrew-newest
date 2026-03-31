@@ -5,7 +5,6 @@ require "abstract_command"
 require "fileutils"
 require "json"
 require "open3"
-require "set"
 require "tmpdir"
 
 module Homebrew
@@ -50,6 +49,7 @@ module Homebrew
       INITIAL_REMOTE_DEPTH = 200
       REMOTE_DEEPEN_STEP = 200
       MAX_REMOTE_DEPTH = 2000
+      LOCAL_SCAN_WORKERS = 4
       INFO_WORKERS = 3
       INFO_BATCH_SIZE = 8
       DATE_MARKER = "__BREW_NEWEST_DATE__"
@@ -61,6 +61,9 @@ module Homebrew
         @debug = args.debug?
         @offline = args.offline?
         @selected_taps = normalize_selected_taps(args.tap)
+        @cache_mutex = Mutex.new
+        @tap_repo_paths = {}
+        @shallow_boundary_cache = {}
 
         count = Integer(args.count || DEFAULT_COUNT)
         odie "--count must be greater than 0" if count <= 0
@@ -69,6 +72,7 @@ module Homebrew
         odie "--width must be at least 80" if width < 80
 
         selections = selected_types(args)
+        prime_shared_state(selections)
         additions_by_type = preload_additions(selections, count)
         available_types = selections.select { |type| additions_by_type.fetch(type).any? }
 
@@ -102,6 +106,11 @@ module Homebrew
         threads.transform_values(&:value)
       end
 
+      def prime_shared_state(selections)
+        taps = selections.flat_map { |type| installed_taps(type) }.uniq
+        taps.each { |tap| tap_repo_path(tap) }
+      end
+
       def newest_candidates(type, count)
         trace "Collecting newest #{type}s"
         candidate_count = if @offline
@@ -131,22 +140,46 @@ module Homebrew
       end
 
       def local_additions(type, count)
+        taps = installed_taps(type)
+        cursor = 0
+        mutex = Mutex.new
         results = []
 
-        installed_taps(type).each do |tap|
-          repo = tap_repo_path(tap)
-          trace "Checking local #{type} repo for #{tap}: #{repo.inspect}"
-          next if !repo || !File.directory?(repo)
+        workers = Array.new([LOCAL_SCAN_WORKERS, taps.length].min) do
+          Thread.new do
+            local_results = []
 
-          scope = (type == :formula) ? "Formula" : "Casks"
-          stdout, _, status = run_command(
-            "git", "-C", repo, "log", "--diff-filter=ARC", "--name-status",
-            "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
-          )
-          next unless status.success?
+            loop do
+              tap = mutex.synchronize do
+                next if cursor >= taps.length
 
-          results.concat(parse_git_log(stdout, type, count, tap, repo))
+                current_tap = taps[cursor]
+                cursor += 1
+                current_tap
+              end
+              break if tap.nil?
+
+              repo = tap_repo_path(tap)
+              trace "Checking local #{type} repo for #{tap}: #{repo.inspect}"
+              next if !repo || !File.directory?(repo)
+
+              scope = (type == :formula) ? "Formula" : "Casks"
+              next unless File.directory?(File.join(repo, scope))
+
+              stdout, _, status = run_command(
+                "git", "-C", repo, "log", "--diff-filter=ARC", "--name-status",
+                "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
+              )
+              next unless status.success?
+
+              local_results.concat(parse_git_log(stdout, type, count, tap, repo))
+            end
+
+            mutex.synchronize { results.concat(local_results) }
+          end
         end
+
+        workers.each(&:join)
 
         dedupe_additions(results)
       rescue Errno::ENOENT
@@ -220,6 +253,8 @@ module Homebrew
       end
 
       def stream_items(type, additions, count, width)
+        return stream_items_offline(type, additions, count, width) if @offline
+
         mutex = Mutex.new
         printed = 0
         found_any = false
@@ -277,6 +312,21 @@ module Homebrew
 
         workers.each(&:join)
         odie "Unable to find available newest #{type}s." unless found_any
+      end
+
+      def stream_items_offline(type, additions, count, width)
+        printed = 0
+
+        additions.each do |entry|
+          cached = cached_metadata_entry(type, entry[:query])
+          next if cached.nil?
+
+          puts format_item_row(build_item(entry, cached), width)
+          printed += 1
+          break if printed >= count
+        end
+
+        odie "Unable to find available newest #{type}s." if printed.zero?
       end
 
       def fetch_metadata_batch(type, names)
@@ -499,24 +549,11 @@ module Homebrew
       def shallow_boundary_commits(repo)
         return Set.new if repo.blank?
 
-        git_dir = bare_git_dir(repo)
-        return Set.new if git_dir.nil?
-
-        shallow_path = File.join(git_dir, "shallow")
-        return Set.new unless File.exist?(shallow_path)
-
-        Set.new(File.readlines(shallow_path, chomp: true).reject(&:empty?))
-      rescue Errno::ENOENT
-        Set.new
-      end
-
-      def bare_git_dir(repo)
-        stdout, _, status = run_command("git", "-C", repo, "rev-parse", "--absolute-git-dir")
-        return unless status.success?
-
-        stdout.strip
-      rescue Errno::ENOENT
-        nil
+        @cache_mutex.synchronize do
+          @shallow_boundary_cache.fetch(repo) do
+            @shallow_boundary_cache[repo] = load_shallow_boundary_commits(repo)
+          end
+        end
       end
 
       def sort_additions_by_date(additions)
@@ -542,7 +579,7 @@ module Homebrew
         when "R", "C"
           fields[2]
         end
-        return if path.nil? || path.empty?
+        return if path.blank?
 
         [status, path]
       end
@@ -572,12 +609,11 @@ module Homebrew
       end
 
       def tap_repo_path(tap)
-        stdout, _, status = run_command(brew_binary, "--repo", tap)
-        return unless status.success?
-
-        stdout.strip
-      rescue Errno::ENOENT
-        nil
+        @cache_mutex.synchronize do
+          @tap_repo_paths.fetch(tap) do
+            @tap_repo_paths[tap] = load_tap_repo_path(tap)
+          end
+        end
       end
 
       def installed_taps(type)
@@ -594,9 +630,11 @@ module Homebrew
       end
 
       def brew_taps
-        @brew_taps ||= begin
-          stdout, _, status = run_command(brew_binary, "tap")
-          status.success? ? stdout.lines.map(&:strip).reject(&:empty?) : []
+        @cache_mutex.synchronize do
+          @brew_taps ||= begin
+            stdout, _, status = run_command(brew_binary, "tap")
+            status.success? ? stdout.lines.map(&:strip).reject(&:empty?) : []
+          end
         end
       end
 
@@ -694,6 +732,45 @@ module Homebrew
         stdout, stderr, status = Open3.capture3(*command)
         debug "Exit #{status.exitstatus}: #{stderr.strip}" if @debug && !status.success? && !stderr.to_s.strip.empty?
         [stdout, stderr, status]
+      end
+
+      def load_shallow_boundary_commits(repo)
+        git_dir = git_dir_path(repo)
+        return Set.new if git_dir.nil?
+
+        shallow_path = File.join(git_dir, "shallow")
+        return Set.new unless File.exist?(shallow_path)
+
+        Set.new(File.readlines(shallow_path, chomp: true).reject(&:empty?))
+      rescue Errno::ENOENT
+        Set.new
+      end
+
+      def git_dir_path(repo)
+        dot_git = File.join(repo, ".git")
+        return dot_git if File.directory?(dot_git)
+
+        if File.file?(dot_git)
+          gitdir = File.read(dot_git)[/\Agitdir: (.+)\n?\z/, 1]
+          return if gitdir.nil?
+
+          return File.expand_path(gitdir, repo)
+        end
+
+        return repo if File.directory?(File.join(repo, "objects")) && File.directory?(File.join(repo, "refs"))
+
+        nil
+      rescue Errno::ENOENT
+        nil
+      end
+
+      def load_tap_repo_path(tap)
+        stdout, _, status = run_command(brew_binary, "--repo", tap)
+        return unless status.success?
+
+        stdout.strip
+      rescue Errno::ENOENT
+        nil
       end
     end
   end
