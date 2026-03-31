@@ -5,6 +5,7 @@ require "abstract_command"
 require "fileutils"
 require "json"
 require "open3"
+require "set"
 require "tmpdir"
 
 module Homebrew
@@ -47,11 +48,12 @@ module Homebrew
       DEFAULT_WIDTH = 140
       DEFAULT_COUNT = 10
       INITIAL_REMOTE_DEPTH = 200
-      REMOTE_DEEPEN_STEP = 2000
-      MAX_REMOTE_DEEPENS = 4
+      REMOTE_DEEPEN_STEP = 200
+      MAX_REMOTE_DEPTH = 2000
       INFO_WORKERS = 3
       INFO_BATCH_SIZE = 8
       DATE_MARKER = "__BREW_NEWEST_DATE__"
+      COMMIT_MARKER = "__BREW_NEWEST_COMMIT__"
       Item = Struct.new(:name, :date, :homepage, :desc)
 
       def run(args)
@@ -138,11 +140,12 @@ module Homebrew
 
           scope = (type == :formula) ? "Formula" : "Casks"
           stdout, _, status = run_command(
-            "git", "-C", repo, "log", "--diff-filter=A", "--name-only", "--format=#{DATE_MARKER}%aI", "--", scope
+            "git", "-C", repo, "log", "--diff-filter=ARC", "--name-status",
+            "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
           )
           next unless status.success?
 
-          results.concat(parse_git_log(stdout, type, count, tap))
+          results.concat(parse_git_log(stdout, type, count, tap, repo))
         end
 
         dedupe_additions(results)
@@ -180,15 +183,16 @@ module Homebrew
         trace "Refreshing remote git cache for #{type}"
         _, _, status = run_command(
           "git", "-C", repo, "fetch", "--force", "--filter=blob:none", "--no-tags",
-          "--update-shallow", "--depth=#{INITIAL_REMOTE_DEPTH}", "origin", "main"
+          "origin", "main"
         )
         return [] unless status.success?
 
         results = remote_git_log(repo, type, count)
-        deepen_attempts = 0
+        current_depth = INITIAL_REMOTE_DEPTH
 
-        while results.length < count && deepen_attempts < MAX_REMOTE_DEEPENS
-          trace "Deepening remote git cache for #{type} (attempt #{deepen_attempts + 1})"
+        while results.length < count && current_depth < MAX_REMOTE_DEPTH
+          next_depth = [current_depth + REMOTE_DEEPEN_STEP, MAX_REMOTE_DEPTH].min
+          trace "Deepening remote git cache for #{type} to depth #{next_depth}"
           _, _, status = run_command(
             "git", "-C", repo, "fetch", "--deepen=#{REMOTE_DEEPEN_STEP}", "--filter=blob:none",
             "--no-tags", "origin", "main"
@@ -196,7 +200,7 @@ module Homebrew
           break unless status.success?
 
           results = remote_git_log(repo, type, count)
-          deepen_attempts += 1
+          current_depth = next_depth
         end
 
         results
@@ -207,11 +211,12 @@ module Homebrew
       def remote_git_log(repo, type, count)
         scope = (type == :formula) ? "Formula" : "Casks"
         stdout, _, status = run_command(
-          "git", "-C", repo, "log", "--diff-filter=A", "--name-only", "--format=#{DATE_MARKER}%aI", "--", scope
+          "git", "-C", repo, "log", "--diff-filter=ARC", "--name-status",
+          "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
         )
         return [] unless status.success?
 
-        parse_git_log(stdout, type, count)
+        parse_git_log(stdout, type, count, nil, repo)
       end
 
       def stream_items(type, additions, count, width)
@@ -452,22 +457,34 @@ module Homebrew
         truncate(value, width)
       end
 
-      def parse_git_log(stdout, type, count, tap = nil)
+      def parse_git_log(stdout, type, count, tap = nil, repo = nil)
         current_date = nil
+        current_commit = nil
         results = []
+        shallow_boundaries = shallow_boundary_commits(repo)
 
         stdout.each_line do |line|
           line = line.chomp
           next if line.empty?
+
+          if line.start_with?(COMMIT_MARKER)
+            current_commit = line.delete_prefix(COMMIT_MARKER)
+            next
+          end
 
           if line.start_with?(DATE_MARKER)
             current_date = line.delete_prefix(DATE_MARKER)[0, 10]
             next
           end
 
-          token = token_from_path(line)
+          next if current_commit && shallow_boundaries.include?(current_commit)
+
+          status, path = parse_name_status_line(line)
+          next unless %w[A R C].include?(status)
+
+          token = token_from_path(path)
           next if token.nil?
-          next unless path_matches_type?(line, type)
+          next unless path_matches_type?(path, type)
 
           query = tap_query_name(tap, type, token)
           next if results.any? { |entry| entry[:query] == query }
@@ -477,6 +494,29 @@ module Homebrew
         end
 
         results
+      end
+
+      def shallow_boundary_commits(repo)
+        return Set.new if repo.blank?
+
+        git_dir = bare_git_dir(repo)
+        return Set.new if git_dir.nil?
+
+        shallow_path = File.join(git_dir, "shallow")
+        return Set.new unless File.exist?(shallow_path)
+
+        Set.new(File.readlines(shallow_path, chomp: true).reject(&:empty?))
+      rescue Errno::ENOENT
+        Set.new
+      end
+
+      def bare_git_dir(repo)
+        stdout, _, status = run_command("git", "-C", repo, "rev-parse", "--absolute-git-dir")
+        return unless status.success?
+
+        stdout.strip
+      rescue Errno::ENOENT
+        nil
       end
 
       def sort_additions_by_date(additions)
@@ -489,6 +529,22 @@ module Homebrew
         return unless path.end_with?(".rb")
 
         File.basename(path, ".rb")
+      end
+
+      def parse_name_status_line(line)
+        fields = line.split("\t")
+        return if fields.empty?
+
+        status = fields.first[0]
+        path = case status
+        when "A"
+          fields[1]
+        when "R", "C"
+          fields[2]
+        end
+        return if path.nil? || path.empty?
+
+        [status, path]
       end
 
       def tap_query_name(tap, type, token)
