@@ -16,6 +16,12 @@ This repository implements the `brew newest` external command.
 - Count `R` and `C` as new entries, using the destination path as the new item.
 - Exclude `M` updates.
 - Sort results by discovered add date descending.
+- With no `--tap`, only show official results from the command's dedicated `homebrew/core` and `homebrew/cask` remote caches.
+- With `--tap`, show only the selected tap(s) from local git history.
+- With `--all`, scan all installed taps from local git history and also include the official `homebrew/core`/`homebrew/cask` caches.
+- Never update installed taps as part of `brew newest`.
+- In offline local-tap modes (`--tap`/`--all`), try `brew info --json=v2` for metadata from the local tap checkout even when API caches are missing.
+- If that local metadata lookup still fails, print the git-discovered entry with `-` for homepage and description.
 
 ## Important History Caveat
 
@@ -41,13 +47,16 @@ This repository implements the `brew newest` external command.
   - initial clone uses depth 200
   - existing cache refresh uses plain `git fetch` and preserves current depth
   - deepening increases by 200 at a time up to max depth 2000
+  - default online mode refreshes only the dedicated official caches, not installed taps
 - Offline performance strategy:
-  - share `brew tap` and `brew --repo` lookups across formula/cask work instead of recomputing them per thread
+  - share `brew --repo` lookups across formula/cask work instead of recomputing them per thread
+  - load installed tap names once when `--all` needs a full local scan
   - cache shallow-boundary commit sets per repo
   - resolve git dirs from `.git` metadata when possible instead of spawning `git rev-parse`
   - skip local `git log` when the relevant `Formula/` or `Casks/` directory is absent
   - scan local taps with a small worker pool (`LOCAL_SCAN_WORKERS = 4`)
-  - in `--offline`, stream rows directly from cached metadata and stop once the requested count is printed
+  - in `--offline`, official-cache mode streams rows from cached metadata and stops once the requested count is printed
+  - for local taps in `--offline`, prefer local `brew info --json=v2` metadata lookup and fall back to git-only rows when that still fails
 
 ## Maintenance Rule
 

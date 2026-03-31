@@ -49,6 +49,17 @@ assert_not_contains() {
   fi
 }
 
+assert_matches_regex() {
+  local haystack="$1"
+  local pattern="$2"
+  local label="$3"
+
+  if ! [[ "$haystack" =~ $pattern ]]; then
+    printf '%s\n' "$haystack" >&2
+    fail "$label"
+  fi
+}
+
 assert_line_count_at_least() {
   local text="$1"
   local min_count="$2"
@@ -118,6 +129,10 @@ run_capture syntax_output ruby -c "$ROOT_DIR/cmd/newest.rb"
 assert_contains "$syntax_output" "Syntax OK" "ruby syntax check failed"
 pass "ruby syntax"
 
+run_capture unit_test_output brew ruby "$ROOT_DIR/test/newest_test.rb"
+assert_contains "$unit_test_output" "0 failures" "unit tests failed"
+pass "ruby unit tests"
+
 run_capture style_output brew style --fix "$ROOT_DIR/cmd/newest.rb"
 pass "brew style --fix"
 
@@ -128,7 +143,7 @@ assert_has_data_rows "$base_output" "Newest Formulae"
 assert_has_data_rows "$base_output" "Newest Casks"
 assert_dates_descending "$base_output" "Newest Formulae"
 assert_dates_descending "$base_output" "Newest Casks"
-pass "default run"
+pass "default official-cache run"
 
 run_capture formula_output "${CMD[@]}" --formula
 assert_contains "$formula_output" "Newest Formulae" "formula-only run missing formula section"
@@ -144,20 +159,26 @@ assert_has_data_rows "$cask_output" "Newest Casks"
 assert_dates_descending "$cask_output" "Newest Casks"
 pass "cask-only run"
 
-run_capture core_tap_output "${CMD[@]}" --tap=homebrew/core --formula
-assert_contains "$core_tap_output" "Newest Formulae" "homebrew/core tap run missing formula section"
-assert_has_data_rows "$core_tap_output" "Newest Formulae"
-pass "homebrew/core tap run"
-
 run_capture local_tap_output "${CMD[@]}" --tap=farmerchris/tap --formula
 assert_contains "$local_tap_output" "Newest Formulae" "farmerchris/tap run missing formula section"
 assert_contains "$local_tap_output" "farmerchris/tap/" "farmerchris/tap run missing tap-qualified formula"
 pass "farmerchris/tap run"
 
-run_capture mixed_tap_output "${CMD[@]}" --tap=homebrew/core,farmerchris/tap --formula
-assert_contains "$mixed_tap_output" "Newest Formulae" "mixed tap run missing formula section"
-assert_has_data_rows "$mixed_tap_output" "Newest Formulae"
-pass "mixed tap run"
+run_capture repeated_tap_output "${CMD[@]}" --tap=farmerchris/tap,farmerchris/tap --formula
+assert_contains "$repeated_tap_output" "Newest Formulae" "repeated tap run missing formula section"
+assert_contains "$repeated_tap_output" "farmerchris/tap/" "repeated tap run missing tap-qualified formula"
+pass "repeated tap normalization run"
+
+run_capture all_taps_output "${CMD[@]}" --all --formula
+assert_contains "$all_taps_output" "Newest Formulae" "all-taps run missing formula section"
+assert_has_data_rows "$all_taps_output" "Newest Formulae"
+pass "all-taps run"
+
+run_capture all_taps_debug_output "${CMD[@]}" --all --formula --count=1 -d
+assert_matches_regex "$all_taps_debug_output" 'debug: Running: .*/?brew tap|debug: Running: brew tap' "all-taps run missing tap enumeration"
+assert_matches_regex "$all_taps_debug_output" 'debug: Running: .*/?brew --repo farmerchris/tap|debug: Running: brew --repo farmerchris/tap' "all-taps run missing local tap repo lookup"
+assert_contains "$all_taps_debug_output" "Checking remote git fallback for formula" "all-taps run missing official cache path"
+pass "all-taps combined local and official scan"
 
 run_capture verbose_output "${CMD[@]}" -v --count=1
 assert_contains "$verbose_output" "==> Collecting newest formulas" "verbose run missing progress output"
@@ -172,7 +193,22 @@ pass "debug run"
 run_capture offline_output "${CMD[@]}" --offline --count=1
 assert_contains "$offline_output" "Newest Formulae" "offline run missing formula section"
 assert_contains "$offline_output" "Newest Casks" "offline run missing cask section"
-pass "offline run"
+pass "offline official-cache run"
+
+run_capture offline_all_output "${CMD[@]}" --offline --all --count=1
+assert_contains "$offline_all_output" "Newest Formulae" "offline all-taps run missing formula section"
+assert_contains "$offline_all_output" "Newest Casks" "offline all-taps run missing cask section"
+pass "offline all-taps keeps official cache path"
+
+run_capture offline_all_taps_output "${CMD[@]}" --offline --all --formula --count=1
+assert_contains "$offline_all_taps_output" "Newest Formulae" "offline all-taps run missing formula section"
+pass "offline all-taps local scan"
+
+run_capture offline_all_taps_debug_output "${CMD[@]}" --offline --all --formula --count=1 -d
+assert_matches_regex "$offline_all_taps_debug_output" 'debug: Running: .*/?brew tap|debug: Running: brew tap' "offline all-taps run missing tap enumeration"
+assert_matches_regex "$offline_all_taps_debug_output" 'debug: Running: .*/?brew --repo farmerchris/tap|debug: Running: brew --repo farmerchris/tap' "offline all-taps run missing local tap repo lookup"
+assert_contains "$offline_all_taps_debug_output" "Checking remote git fallback for formula" "offline all-taps run missing official cache path"
+pass "offline all-taps combined local and official scan"
 
 run_capture width_output "${CMD[@]}" --width=120 --count=1
 assert_line_count_at_least "$width_output" 6 "width run output too short"

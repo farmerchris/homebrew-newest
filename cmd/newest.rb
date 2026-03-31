@@ -27,6 +27,8 @@ module Homebrew
                description: "Print detailed progress and subprocess failures."
         switch "-o", "--offline",
                description: "Use only local taps and cached metadata; do not fetch from the network."
+        switch "--all",
+               description: "Scan all installed taps instead of only the official caches."
         comma_array "--tap=",
                     description: "Restrict results to the specified tap or comma-separated taps."
         flag "-n", "--count=",
@@ -60,6 +62,7 @@ module Homebrew
         @verbose = args.verbose? || args.debug?
         @debug = args.debug?
         @offline = args.offline?
+        @all_taps = args.all?
         @selected_taps = normalize_selected_taps(args.tap)
         @cache_mutex = Mutex.new
         @tap_repo_paths = {}
@@ -107,7 +110,7 @@ module Homebrew
       end
 
       def prime_shared_state(selections)
-        taps = selections.flat_map { |type| installed_taps(type) }.uniq
+        taps = selected_taps_for_scan(selections)
         taps.each { |tap| tap_repo_path(tap) }
       end
 
@@ -118,11 +121,14 @@ module Homebrew
         else
           [count * 4, count + 10].max
         end
-        additions = local_additions(type, candidate_count)
-        trace "Local #{type} additions found: #{additions.length}"
-        if official_fallback_allowed?(type)
+        additions = []
+        if scan_local_taps?
+          additions.concat(local_additions(type, candidate_count))
+          trace "Local #{type} additions found: #{additions.length}"
+        end
+        if use_official_cache?
           additions = dedupe_additions(additions + remote_git_additions(type, candidate_count))
-          trace "Remote git #{type} additions found: #{additions.length}"
+          trace "Combined #{type} additions found: #{additions.length}"
         end
         if additions.empty?
           return [] if @selected_taps&.any?
@@ -140,7 +146,7 @@ module Homebrew
       end
 
       def local_additions(type, count)
-        taps = installed_taps(type)
+        taps = selected_taps_for_scan(type)
         cursor = 0
         mutex = Mutex.new
         results = []
@@ -187,8 +193,6 @@ module Homebrew
       end
 
       def remote_git_additions(type, count)
-        return [] unless official_fallback_allowed?(type)
-
         repo = remote_cache_path(type)
         remote = remote_git_url(type)
         FileUtils.mkdir_p(File.dirname(repo))
@@ -319,9 +323,18 @@ module Homebrew
 
         additions.each do |entry|
           cached = cached_metadata_entry(type, entry[:query])
-          next if cached.nil?
+          info = cached
+          info = fetch_metadata_batch_uncached(type, [entry[:query]])[entry[:query]] if info.nil? && scan_local_taps?
 
-          puts format_item_row(build_item(entry, cached), width)
+          item = if info.nil? && scan_local_taps?
+            build_offline_local_item(entry)
+          elsif info.nil?
+            next
+          else
+            build_item(entry, info)
+          end
+
+          puts format_item_row(item, width)
           printed += 1
           break if printed >= count
         end
@@ -336,7 +349,7 @@ module Homebrew
       end
 
       def fetch_metadata_batch_uncached(type, names)
-        if @offline
+        if @offline && !scan_local_taps?
           trace "Offline mode: skipping uncached metadata fetch for #{type} (#{names.length})"
           return {}
         end
@@ -371,6 +384,15 @@ module Homebrew
           date:     entry.fetch(:date),
           homepage: info.fetch(:homepage),
           desc:     info.fetch(:desc),
+        )
+      end
+
+      def build_offline_local_item(entry)
+        Item.new(
+          name:     entry.fetch(:query),
+          date:     entry.fetch(:date),
+          homepage: "-",
+          desc:     "-",
         )
       end
 
@@ -616,32 +638,41 @@ module Homebrew
         end
       end
 
-      def installed_taps(type)
-        taps = if @selected_taps&.any?
-          @selected_taps.dup
-        else
-          all = brew_taps
-          all << "homebrew/core" if type == :formula
-          all << "homebrew/cask" if type == :cask
-          all.uniq
-        end
-
-        taps.select { |tap| tap_supports_type?(tap, type) }
-      end
-
-      def brew_taps
-        @cache_mutex.synchronize do
-          @brew_taps ||= begin
-            stdout, _, status = run_command(brew_binary, "tap")
-            status.success? ? stdout.lines.map(&:strip).reject(&:empty?) : []
-          end
-        end
-      end
-
       def normalize_selected_taps(taps)
         return if taps.blank?
 
         taps.map(&:strip).reject(&:empty?).uniq
+      end
+
+      def scan_all_taps?
+        @all_taps
+      end
+
+      def explicit_tap_selection?
+        @selected_taps&.any?
+      end
+
+      def scan_local_taps?
+        explicit_tap_selection? || scan_all_taps?
+      end
+
+      def use_official_cache?
+        !explicit_tap_selection?
+      end
+
+      def selected_taps_for_scan(target)
+        types = target.is_a?(Array) ? target : [target]
+        taps = if explicit_tap_selection?
+          @selected_taps
+        elsif scan_all_taps?
+          brew_taps_for_scan
+        else
+          []
+        end
+
+        taps.select do |tap|
+          types.any? { |type| tap_supports_type?(tap, type) }
+        end
       end
 
       def tap_supports_type?(tap, type)
@@ -650,11 +681,16 @@ module Homebrew
         tap.casecmp("homebrew/core").nonzero?
       end
 
-      def official_fallback_allowed?(type)
-        return true if @selected_taps.blank?
-
-        target = (type == :formula) ? "homebrew/core" : "homebrew/cask"
-        @selected_taps.any? { |tap| tap.casecmp(target).zero? }
+      def brew_taps_for_scan
+        @cache_mutex.synchronize do
+          @brew_taps_for_scan ||= begin
+            stdout, _, status = run_command(brew_binary, "tap")
+            taps = status.success? ? stdout.lines.map(&:strip).reject(&:empty?) : []
+            taps << "homebrew/core"
+            taps << "homebrew/cask"
+            taps.uniq
+          end
+        end
       end
 
       def remote_git_url(type)
