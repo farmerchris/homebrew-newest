@@ -4,11 +4,9 @@
 require "abstract_command"
 require "fileutils"
 require "json"
-require "net/http"
 require "open3"
 require "thread"
 require "tmpdir"
-require "uri"
 
 module Homebrew
   module Cmd
@@ -29,6 +27,8 @@ module Homebrew
                description: "Print detailed progress and subprocess failures."
         switch "-o", "--offline",
                description: "Use only local taps and cached metadata; do not fetch from the network."
+        comma_array "--tap=",
+                    description: "Restrict results to the specified tap or comma-separated taps."
         flag "-n", "--count=",
              description: "Number of entries to show for each selected type."
         flag "--width=",
@@ -45,7 +45,6 @@ end
 class BrewNewest
   include Utils::Output::Mixin
 
-  GITHUB_API = "https://api.github.com".freeze
   DEFAULT_WIDTH = 140
   DEFAULT_COUNT = 10
   INITIAL_REMOTE_DEPTH = 200
@@ -60,6 +59,7 @@ class BrewNewest
     @verbose = args.verbose? || args.debug?
     @debug = args.debug?
     @offline = args.offline?
+    @selected_taps = normalize_selected_taps(args.tap)
 
     count = Integer(args.count || DEFAULT_COUNT)
     odie "--count must be greater than 0" if count <= 0
@@ -69,8 +69,13 @@ class BrewNewest
 
     selections = selected_types(args)
     additions_by_type = preload_additions(selections, count)
+    available_types = selections.select { |type| additions_by_type.fetch(type).any? }
 
-    selections.each_with_index do |type, index|
+    if available_types.empty?
+      odie "No matching formulae or casks found for the selected taps."
+    end
+
+    available_types.each_with_index do |type, index|
       puts if index.positive?
       puts title_for(type)
       print_table_header(width)
@@ -107,18 +112,13 @@ class BrewNewest
     end
     additions = local_additions(type, candidate_count)
     trace "Local #{type} additions found: #{additions.length}"
-    if additions.length < count
-      additions = remote_git_additions(type, candidate_count)
+    if official_fallback_allowed?(type)
+      additions = dedupe_additions(additions + remote_git_additions(type, candidate_count))
       trace "Remote git #{type} additions found: #{additions.length}"
     end
-    if additions.length < count
-      trace "Offline mode: skipping GitHub API fallback for #{type}" if @offline
-    end
-    if additions.length < count && !@offline
-      additions = github_additions(type, candidate_count)
-      trace "GitHub API #{type} additions found: #{additions.length}"
-    end
     if additions.empty?
+      return [] if @selected_taps&.any?
+
       if @offline
         odie "Unable to determine newest #{type}s in offline mode. Install local #{type == :formula ? 'homebrew/core' : 'homebrew/cask'} tap history or run without --offline."
       end
@@ -130,62 +130,30 @@ class BrewNewest
   end
 
   def local_additions(type, count)
-    repo = local_repo_path(type)
-    trace "Checking local #{type} repo: #{repo.inspect}"
-    return [] unless repo && File.directory?(repo)
+    results = []
 
-    scope = type == :formula ? "Formula" : "Casks"
-    stdout, stderr, status = run_command(
-      "git", "-C", repo, "log", "--diff-filter=A", "--name-only", "--format=#{DATE_MARKER}%aI", "--", scope
-    )
-    return [] unless status.success?
+    installed_taps(type).each do |tap|
+      repo = tap_repo_path(tap)
+      trace "Checking local #{type} repo for #{tap}: #{repo.inspect}"
+      next unless repo && File.directory?(repo)
 
-    parse_git_log(stdout, type, count)
+      scope = type == :formula ? "Formula" : "Casks"
+      stdout, stderr, status = run_command(
+        "git", "-C", repo, "log", "--diff-filter=A", "--name-only", "--format=#{DATE_MARKER}%aI", "--", scope
+      )
+      next unless status.success?
+
+      results.concat(parse_git_log(stdout, type, count, tap))
+    end
+
+    dedupe_additions(results)
   rescue Errno::ENOENT
     []
   end
 
-  def github_additions(type, count)
-    repo = github_repo(type)
-    path_prefix = type == :formula ? "Formula/" : "Casks/"
-    results = []
-    page = 1
-
-    while results.length < count && page <= 10
-      trace "Querying GitHub API for #{type} commits page #{page}"
-      commits = github_get_json("/repos/#{repo}/commits?per_page=100&page=#{page}")
-      break unless commits.is_a?(Array) && !commits.empty?
-
-      commits.each do |commit_summary|
-        commit = github_get_json(URI(commit_summary.fetch("url")).request_uri)
-        next unless commit.is_a?(Hash)
-
-        date = commit.dig("commit", "author", "date")
-        next if date.nil?
-
-        Array(commit["files"]).each do |file|
-          next unless file["status"] == "added"
-
-          file_path = file["filename"]
-          next unless file_path&.start_with?(path_prefix)
-
-          token = token_from_path(file_path)
-          next if token.nil? || results.any? { |entry| entry[:token] == token }
-
-          results << { token: token, date: date[0, 10] }
-          return results if results.length >= count
-        end
-      end
-
-      page += 1
-    end
-
-    results
-  rescue StandardError
-    []
-  end
-
   def remote_git_additions(type, count)
+    return [] unless official_fallback_allowed?(type)
+
     repo = remote_cache_path(type)
     remote = remote_git_url(type)
     FileUtils.mkdir_p(File.dirname(repo))
@@ -257,7 +225,7 @@ class BrewNewest
     unresolved = []
 
     additions.each_with_index do |entry, index|
-      cached = cached_metadata_entry(type, entry[:token])
+      cached = cached_metadata_entry(type, entry[:query])
       if cached.nil?
         unresolved << [index, entry]
         next
@@ -286,13 +254,13 @@ class BrewNewest
           end
           break if batch.nil?
 
-          infos = fetch_metadata_batch(type, batch.map { |_, entry| entry[:token] })
+          infos = fetch_metadata_batch(type, batch.map { |_, entry| entry[:query] })
 
           mutex.synchronize do
             next if stop
 
             batch.each do |index, entry|
-              info = infos[entry[:token]]
+              info = infos[entry[:query]]
               pending[index] = info.nil? ? nil : build_item(entry, info)
             end
 
@@ -324,7 +292,16 @@ class BrewNewest
     stdout, stderr, status = run_command(brew_binary, "info", "--json=v2", flag, *names)
     return parse_metadata_collection(type, stdout) if status.success?
 
-    return {} if names.length == 1
+    if names.length == 1
+      fallback = fallback_query_name(names.first)
+      if fallback && fallback != names.first
+        trace "Retrying metadata lookup for #{type} with fallback query: #{fallback}"
+        stdout, stderr, status = run_command(brew_binary, "info", "--json=v2", flag, fallback)
+        return parse_metadata_collection(type, stdout) if status.success?
+      end
+
+      return {}
+    end
 
     midpoint = names.length / 2
     left = fetch_metadata_batch_uncached(type, names[0...midpoint])
@@ -343,24 +320,24 @@ class BrewNewest
     )
   end
 
-  def cached_metadata_entry(type, name)
-    path = cached_metadata_path(type, name)
+  def cached_metadata_entry(type, query)
+    path = cached_metadata_path(type, query)
     if File.exist?(path)
-      debug "Using cached metadata for #{type}: #{name}"
+      debug "Using cached metadata for #{type}: #{query}"
       return parse_metadata_json(type, File.read(path))
     end
 
-    aggregate_cached_metadata_entry(type, name)
+    aggregate_cached_metadata_entry(type, query)
   rescue Errno::ENOENT, JSON::ParserError
     nil
   end
 
-  def aggregate_cached_metadata_entry(type, name)
+  def aggregate_cached_metadata_entry(type, query)
     cache = aggregate_metadata_cache(type)
-    entry = cache[name]
+    entry = cache[query]
     return nil if entry.nil?
 
-    debug "Using aggregate cached metadata for #{type}: #{name}"
+    debug "Using aggregate cached metadata for #{type}: #{query}"
     entry
   end
 
@@ -377,8 +354,7 @@ class BrewNewest
         else
           entries = JSON.parse(payload)
           entries.each_with_object({}) do |entry, map|
-            token = type == :formula ? entry.fetch("name") : entry.fetch("token")
-            map[token] = metadata_hash(type, entry)
+            index_metadata_entry(type, entry, map)
           end
         end
       else
@@ -393,8 +369,7 @@ class BrewNewest
     json = JSON.parse(json_text)
     key = type == :formula ? "formulae" : "casks"
     Array(json[key]).each_with_object({}) do |entry, map|
-      token = type == :formula ? entry.fetch("name") : entry.fetch("token")
-      map[token] = metadata_hash(type, entry)
+      index_metadata_entry(type, entry, map)
     end
   end
 
@@ -429,7 +404,7 @@ class BrewNewest
   end
 
   def column_widths(width)
-    name_width = 24
+    name_width = 30
     date_width = 10
     separator = "  "
     fixed = name_width + date_width + (separator.length * 3)
@@ -478,7 +453,7 @@ class BrewNewest
     truncate(value, width)
   end
 
-  def parse_git_log(stdout, type, count)
+  def parse_git_log(stdout, type, count, tap = nil)
     current_date = nil
     results = []
 
@@ -494,9 +469,10 @@ class BrewNewest
       token = token_from_path(line)
       next if token.nil?
       next unless path_matches_type?(line, type)
-      next if results.any? { |entry| entry[:token] == token }
+      query = tap_query_name(tap, type, token)
+      next if results.any? { |entry| entry[:query] == query }
 
-      results << { token: token, date: current_date }
+      results << { token: token, query: query, date: current_date }
       break if results.length >= count
     end
 
@@ -515,6 +491,22 @@ class BrewNewest
     File.basename(path, ".rb")
   end
 
+  def tap_query_name(tap, type, token)
+    return token if tap.nil?
+    return token if type == :formula && tap.casecmp("homebrew/core").zero?
+    return token if type == :cask && tap.casecmp("homebrew/cask").zero?
+
+    "#{tap}/#{token}"
+  end
+
+  def dedupe_additions(additions)
+    additions.each_with_object([]) do |entry, unique|
+      next if unique.any? { |candidate| candidate[:query] == entry[:query] }
+
+      unique << entry
+    end
+  end
+
   def path_matches_type?(path, type)
     if type == :formula
       path.start_with?("Formula/")
@@ -523,8 +515,7 @@ class BrewNewest
     end
   end
 
-  def local_repo_path(type)
-    tap = type == :formula ? "homebrew/core" : "homebrew/cask"
+  def tap_repo_path(tap)
     stdout, stderr, status = run_command(brew_binary, "--repo", tap)
     return nil unless status.success?
 
@@ -533,8 +524,43 @@ class BrewNewest
     nil
   end
 
-  def github_repo(type)
-    type == :formula ? "Homebrew/homebrew-core" : "Homebrew/homebrew-cask"
+  def installed_taps(type)
+    taps = if @selected_taps&.any?
+      @selected_taps.dup
+    else
+      all = brew_taps
+      all << "homebrew/core" if type == :formula
+      all << "homebrew/cask" if type == :cask
+      all.uniq
+    end
+
+    taps.select { |tap| tap_supports_type?(tap, type) }
+  end
+
+  def brew_taps
+    @brew_taps ||= begin
+      stdout, stderr, status = run_command(brew_binary, "tap")
+      status.success? ? stdout.lines.map(&:strip).reject(&:empty?) : []
+    end
+  end
+
+  def normalize_selected_taps(taps)
+    return nil if taps.nil? || taps.empty?
+
+    taps.map(&:strip).reject(&:empty?).uniq
+  end
+
+  def tap_supports_type?(tap, type)
+    return true if type == :formula
+
+    tap.casecmp("homebrew/core").nonzero?
+  end
+
+  def official_fallback_allowed?(type)
+    return true if @selected_taps.nil? || @selected_taps.empty?
+
+    target = type == :formula ? "homebrew/core" : "homebrew/cask"
+    @selected_taps.any? { |tap| tap.casecmp(target).zero? }
   end
 
   def remote_git_url(type)
@@ -545,9 +571,10 @@ class BrewNewest
     File.join(Dir.tmpdir, "brew-newest-cache", "#{type}.git")
   end
 
-  def cached_metadata_path(type, name)
+  def cached_metadata_path(type, query)
     dir = type == :formula ? "formula" : "cask"
-    File.expand_path("~/Library/Caches/Homebrew/api/#{dir}/#{name}.json")
+    token = query.to_s.split("/").last
+    File.expand_path("~/Library/Caches/Homebrew/api/#{dir}/#{token}.json")
   end
 
   def aggregate_cached_metadata_path(type)
@@ -570,36 +597,19 @@ class BrewNewest
     }
   end
 
-  def github_get_json(path)
-    gh_path = path.sub(%r{\A/}, "")
-    stdout, stderr, status = run_command("gh", "api", gh_path)
-    return JSON.parse(stdout) if status.success?
+  def index_metadata_entry(type, entry, map)
+    token = type == :formula ? entry.fetch("name") : entry.fetch("token")
+    full_name = type == :formula ? entry.fetch("full_name", token) : entry.fetch("full_token", token)
+    metadata = metadata_hash(type, entry)
 
-    debug "Falling back to direct GitHub HTTP for #{path}"
-    uri = URI("#{GITHUB_API}#{path}")
-    response = Net::HTTP.start(uri.host, uri.port, use_ssl: true) do |http|
-      request = Net::HTTP::Get.new(uri)
-      request["Accept"] = "application/vnd.github+json"
-      request["User-Agent"] = "brew-newest"
-      http.request(request)
-    end
+    map[token] = metadata
+    map[full_name] = metadata
+  end
 
-    return nil unless response.is_a?(Net::HTTPSuccess)
+  def fallback_query_name(query)
+    return nil unless query.include?("/")
 
-    JSON.parse(response.body)
-  rescue Errno::ENOENT
-    debug "GitHub CLI unavailable, using direct GitHub HTTP for #{path}"
-    uri = URI("#{GITHUB_API}#{path}")
-    response = Net::HTTP.start(uri.host, uri.port, use_ssl: true) do |http|
-      request = Net::HTTP::Get.new(uri)
-      request["Accept"] = "application/vnd.github+json"
-      request["User-Agent"] = "brew-newest"
-      http.request(request)
-    end
-
-    return nil unless response.is_a?(Net::HTTPSuccess)
-
-    JSON.parse(response.body)
+    query.split("/").last
   end
 
   def brew_binary
