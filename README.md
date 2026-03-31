@@ -7,7 +7,7 @@ Homebrew tap providing the `brew newest` external command.
 Tap this repository and run:
 
 ```sh
-brew tap farmerchris/brew-newest https://github.com/farmerchris/brew-newest
+brew tap farmerchris/homebrew-newest
 brew newest
 brew newest --formula
 brew newest --cask --count=20
