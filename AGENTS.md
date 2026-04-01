@@ -46,6 +46,7 @@ This repository implements the `brew newest` external command.
 - Remote cache strategy:
   - initial clone uses depth 200
   - existing cache refresh uses plain `git fetch` and preserves current depth
+  - bare official caches must fetch `refs/heads/main` into the local `refs/heads/main` ref explicitly; fetching only `main` can leave the cache stale while updating only `FETCH_HEAD`
   - deepening increases by 200 at a time up to max depth 2000
   - default online mode refreshes only the dedicated official caches, not installed taps
 - Offline performance strategy:

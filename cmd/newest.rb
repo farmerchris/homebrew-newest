@@ -195,6 +195,7 @@ module Homebrew
       def remote_git_additions(type, count)
         repo = remote_cache_path(type)
         remote = remote_git_url(type)
+        refspec = remote_cache_refspec
         FileUtils.mkdir_p(File.dirname(repo))
         trace "Checking remote git fallback for #{type}: #{remote}"
 
@@ -220,7 +221,7 @@ module Homebrew
         trace "Refreshing remote git cache for #{type}"
         _, _, status = run_command(
           "git", "-C", repo, "fetch", "--force", "--filter=blob:none", "--no-tags",
-          "origin", "main"
+          "origin", refspec
         )
         return [] unless status.success?
 
@@ -232,7 +233,7 @@ module Homebrew
           trace "Deepening remote git cache for #{type} to depth #{next_depth}"
           _, _, status = run_command(
             "git", "-C", repo, "fetch", "--deepen=#{REMOTE_DEEPEN_STEP}", "--filter=blob:none",
-            "--no-tags", "origin", "main"
+            "--no-tags", "origin", refspec
           )
           break unless status.success?
 
@@ -699,6 +700,10 @@ module Homebrew
 
       def remote_cache_path(type)
         File.join(Dir.tmpdir, "brew-newest-cache", "#{type}.git")
+      end
+
+      def remote_cache_refspec
+        "+refs/heads/main:refs/heads/main"
       end
 
       def cached_metadata_path(type, query)

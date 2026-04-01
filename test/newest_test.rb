@@ -96,6 +96,28 @@ class BrewNewestTest < Minitest::Test
     assert_equal(["farmerchris/tap/local", "official"], results.map { |entry| entry[:query] })
   end
 
+  def test_remote_git_additions_fetches_into_local_main_ref_for_bare_cache
+    commands = []
+    @subject.define_singleton_method(:remote_cache_path) { |_type| "/tmp/remote.git" }
+    @subject.define_singleton_method(:remote_git_log) do |_repo, _type, _count|
+      [{ token: "demo", query: "demo", date: "2026-03-31" }]
+    end
+    @subject.define_singleton_method(:run_command) do |*command|
+      commands << command
+      ["", "", Object.new.tap { |status| status.define_singleton_method(:success?) { true } }]
+    end
+
+    @subject.send(:remote_git_additions, :formula, 1)
+
+    assert_includes(
+      commands,
+      [
+        "git", "-C", "/tmp/remote.git", "fetch", "--force", "--filter=blob:none", "--no-tags",
+        "origin", "+refs/heads/main:refs/heads/main",
+      ],
+    )
+  end
+
   def test_offline_local_tap_mode_uses_uncached_metadata_lookup
     @subject.instance_variable_set(:@selected_taps, ["farmerchris/tap"])
     @subject.instance_variable_set(:@offline, true)
