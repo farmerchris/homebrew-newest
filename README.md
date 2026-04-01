@@ -1,4 +1,4 @@
-# brew-newest
+# homebrew-newest
 
 Homebrew tap providing the `brew newest` external command.
 
