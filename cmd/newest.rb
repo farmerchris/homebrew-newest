@@ -25,8 +25,8 @@ module Homebrew
                description: "Print progress while gathering newest entries."
         switch "-d", "--debug",
                description: "Print detailed progress and subprocess failures."
-        switch "-o", "--offline",
-               description: "Use only local taps and cached metadata; do not fetch from the network."
+        switch "--force-homebrew-api",
+               description: "Force use of the remote git cache for official taps, even if they are installed locally."
         switch "--all",
                description: "Scan all installed taps instead of only the official caches."
         comma_array "--tap=",
@@ -51,6 +51,9 @@ module Homebrew
       INITIAL_REMOTE_DEPTH = 200
       REMOTE_DEEPEN_STEP = 200
       MAX_REMOTE_DEPTH = 2000
+      INITIAL_LOCAL_LOG_COUNT = 200
+      LOCAL_LOG_DEEPEN_STEP = 200
+      MAX_LOCAL_LOG_COUNT = 2000
       LOCAL_SCAN_WORKERS = 4
       INFO_WORKERS = 3
       INFO_BATCH_SIZE = 8
@@ -61,7 +64,7 @@ module Homebrew
       def run(args)
         @verbose = args.verbose? || args.debug?
         @debug = args.debug?
-        @offline = args.offline?
+        @force_remote = args.force_homebrew_api?
         @all_taps = args.all?
         @selected_taps = normalize_selected_taps(args.tap)
         @cache_mutex = Mutex.new
@@ -116,28 +119,26 @@ module Homebrew
 
       def newest_candidates(type, count)
         trace "Collecting newest #{type}s"
-        candidate_count = if @offline
-          [count * 20, count + 100].max
-        else
-          [count * 4, count + 10].max
-        end
+        candidate_count = [count * 4, count + 10].max
         additions = []
         if scan_local_taps?
           additions.concat(local_additions(type, candidate_count))
           trace "Local #{type} additions found: #{additions.length}"
         end
         if use_official_cache?
-          additions = dedupe_additions(additions + remote_git_additions(type, candidate_count))
+          official_tap = official_tap_name(type)
+          repo = !@force_remote && tap_repo_path(official_tap)
+          if repo && File.directory?(repo)
+            trace "Using installed #{official_tap} tap at #{repo}"
+            additions.concat(scan_single_tap(official_tap, type, candidate_count))
+            additions = dedupe_additions(additions)
+          else
+            additions = dedupe_additions(additions + remote_git_additions(type, candidate_count))
+          end
           trace "Combined #{type} additions found: #{additions.length}"
         end
         if additions.empty?
           return [] if @selected_taps&.any?
-
-          if @offline
-            tap_name = (type == :formula) ? "homebrew/core" : "homebrew/cask"
-            odie "Unable to determine newest #{type}s in offline mode. " \
-                 "Install local #{tap_name} tap history or run without --offline."
-          end
 
           odie "Unable to determine newest #{type}s."
         end
@@ -173,7 +174,8 @@ module Homebrew
               next unless File.directory?(File.join(repo, scope))
 
               stdout, _, status = run_command(
-                "git", "-C", repo, "log", "--diff-filter=ARC", "--name-status",
+                "git", "-C", repo, "log", "--max-count=#{INITIAL_LOCAL_LOG_COUNT}",
+                "--diff-filter=ARC", "--name-status",
                 "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
               )
               next unless status.success?
@@ -198,16 +200,6 @@ module Homebrew
         refspec = remote_cache_refspec
         FileUtils.mkdir_p(File.dirname(repo))
         trace "Checking remote git fallback for #{type}: #{remote}"
-
-        if @offline
-          unless Dir.exist?(repo)
-            trace "Offline mode: no stored remote git cache for #{type} at #{repo}"
-            return []
-          end
-
-          trace "Offline mode: using stored remote git cache for #{type}"
-          return remote_git_log(repo, type, count)
-        end
 
         unless Dir.exist?(repo)
           trace "Cloning shallow remote cache into #{repo}"
@@ -258,8 +250,6 @@ module Homebrew
       end
 
       def stream_items(type, additions, count, width)
-        return stream_items_offline(type, additions, count, width) if @offline
-
         mutex = Mutex.new
         printed = 0
         found_any = false
@@ -319,30 +309,6 @@ module Homebrew
         odie "Unable to find available newest #{type}s." unless found_any
       end
 
-      def stream_items_offline(type, additions, count, width)
-        printed = 0
-
-        additions.each do |entry|
-          cached = cached_metadata_entry(type, entry[:query])
-          info = cached
-          info = fetch_metadata_batch_uncached(type, [entry[:query]])[entry[:query]] if info.nil? && scan_local_taps?
-
-          item = if info.nil? && scan_local_taps?
-            build_offline_local_item(entry)
-          elsif info.nil?
-            next
-          else
-            build_item(entry, info)
-          end
-
-          puts format_item_row(item, width)
-          printed += 1
-          break if printed >= count
-        end
-
-        odie "Unable to find available newest #{type}s." if printed.zero?
-      end
-
       def fetch_metadata_batch(type, names)
         return {} if names.empty?
 
@@ -350,11 +316,6 @@ module Homebrew
       end
 
       def fetch_metadata_batch_uncached(type, names)
-        if @offline && !scan_local_taps?
-          trace "Offline mode: skipping uncached metadata fetch for #{type} (#{names.length})"
-          return {}
-        end
-
         flag = (type == :formula) ? "--formula" : "--cask"
         trace "Fetching metadata batch for #{type} (#{names.length}): #{names.join(", ")}"
         stdout, _, status = run_command(brew_binary, "info", "--json=v2", flag, *names)
@@ -385,15 +346,6 @@ module Homebrew
           date:     entry.fetch(:date),
           homepage: info.fetch(:homepage),
           desc:     info.fetch(:desc),
-        )
-      end
-
-      def build_offline_local_item(entry)
-        Item.new(
-          name:     entry.fetch(:query),
-          date:     entry.fetch(:date),
-          homepage: "-",
-          desc:     "-",
         )
       end
 
@@ -680,6 +632,42 @@ module Homebrew
         return true if type == :formula
 
         tap.casecmp("homebrew/core").nonzero?
+      end
+
+      def official_tap_name(type)
+        (type == :formula) ? "homebrew/core" : "homebrew/cask"
+      end
+
+      def scan_single_tap(tap, type, count)
+        repo = tap_repo_path(tap)
+        return [] if !repo || !File.directory?(repo)
+
+        scope = (type == :formula) ? "Formula" : "Casks"
+        return [] unless File.directory?(File.join(repo, scope))
+
+        log_count = INITIAL_LOCAL_LOG_COUNT
+        results = local_git_log(repo, type, count, log_count, tap, scope)
+
+        while results.length < count && log_count < MAX_LOCAL_LOG_COUNT
+          log_count = [log_count + LOCAL_LOG_DEEPEN_STEP, MAX_LOCAL_LOG_COUNT].min
+          trace "Deepening local git log for #{tap} #{type} to #{log_count} commits"
+          results = local_git_log(repo, type, count, log_count, tap, scope)
+        end
+
+        results
+      rescue Errno::ENOENT
+        []
+      end
+
+      def local_git_log(repo, type, count, log_count, tap, scope)
+        stdout, _, status = run_command(
+          "git", "-C", repo, "log", "--max-count=#{log_count}",
+          "--diff-filter=ARC", "--name-status",
+          "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
+        )
+        return [] unless status.success?
+
+        parse_git_log(stdout, type, count, tap, repo)
       end
 
       def brew_taps_for_scan

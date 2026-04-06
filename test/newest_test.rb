@@ -1,4 +1,9 @@
-require "minitest/autorun"
+begin
+  require "minitest/autorun"
+rescue LoadError
+  require "stringio"
+  require_relative "minitest_shim"
+end
 require_relative "../cmd/newest"
 
 class BrewNewestTest < Minitest::Test
@@ -9,7 +14,7 @@ class BrewNewestTest < Minitest::Test
     @subject.instance_variable_set(:@shallow_boundary_cache, {})
     @subject.instance_variable_set(:@selected_taps, nil)
     @subject.instance_variable_set(:@all_taps, false)
-    @subject.instance_variable_set(:@offline, false)
+    @subject.instance_variable_set(:@force_remote, false)
   end
 
   def test_parse_git_log_accepts_add_rename_and_copy_using_destination_path
@@ -83,6 +88,8 @@ class BrewNewestTest < Minitest::Test
   def test_newest_candidates_uses_both_local_and_official_sources_for_all_mode
     @subject.instance_variable_set(:@all_taps, true)
 
+    @subject.define_singleton_method(:tap_repo_path) { |_tap| nil }
+
     def @subject.local_additions(_type, _count)
       [{ token: "local", query: "farmerchris/tap/local", date: "2026-03-31" }]
     end
@@ -118,62 +125,69 @@ class BrewNewestTest < Minitest::Test
     )
   end
 
-  def test_offline_local_tap_mode_uses_uncached_metadata_lookup
-    @subject.instance_variable_set(:@selected_taps, ["farmerchris/tap"])
-    @subject.instance_variable_set(:@offline, true)
+  def test_newest_candidates_uses_installed_official_tap_instead_of_remote_cache
+    @subject.instance_variable_set(:@selected_taps, nil)
+    @subject.instance_variable_set(:@all_taps, false)
 
-    def @subject.cached_metadata_entry(_type, _query)
-      nil
+    scan_single_tap_called = false
+    remote_git_additions_called = false
+
+    @subject.define_singleton_method(:tap_repo_path) { |_tap| Dir.tmpdir }
+    @subject.define_singleton_method(:scan_single_tap) do |_tap, _type, _count|
+      scan_single_tap_called = true
+      [{ token: "local-formula", query: "local-formula", date: "2026-03-31" }]
+    end
+    @subject.define_singleton_method(:remote_git_additions) do |_type, _count|
+      remote_git_additions_called = true
+      []
     end
 
-    def @subject.fetch_metadata_batch_uncached(_type, names)
-      {
-        names.first => {
-          name: "farmerchris/tap/demo",
-          homepage: "https://example.com",
-          desc: "Demo formula",
-        },
-      }
-    end
+    results = @subject.send(:newest_candidates, :formula, 5)
 
-    output = capture_io do
-      @subject.send(
-        :stream_items_offline,
-        :formula,
-        [{ token: "demo", query: "farmerchris/tap/demo", date: "2026-03-31" }],
-        1,
-        140,
-      )
-    end.first
-
-    assert_includes output, "farmerchris/tap/demo"
-    assert_includes output, "https://example.com"
-    assert_includes output, "Demo formula"
+    assert scan_single_tap_called, "should have scanned the installed official tap"
+    refute remote_git_additions_called, "should not have used remote cache when official tap is installed"
+    assert_equal ["local-formula"], results.map { |e| e[:query] }
   end
 
-  def test_offline_local_tap_mode_falls_back_to_placeholder_metadata
-    @subject.instance_variable_set(:@selected_taps, ["farmerchris/tap"])
-    @subject.instance_variable_set(:@offline, true)
+  def test_newest_candidates_falls_back_to_remote_cache_when_official_tap_not_installed
+    @subject.instance_variable_set(:@selected_taps, nil)
+    @subject.instance_variable_set(:@all_taps, false)
 
-    def @subject.cached_metadata_entry(_type, _query)
-      nil
+    remote_git_additions_called = false
+
+    @subject.define_singleton_method(:tap_repo_path) { |_tap| nil }
+    @subject.define_singleton_method(:remote_git_additions) do |_type, _count|
+      remote_git_additions_called = true
+      [{ token: "remote-formula", query: "remote-formula", date: "2026-03-30" }]
     end
 
-    def @subject.fetch_metadata_batch_uncached(_type, _names)
-      {}
+    results = @subject.send(:newest_candidates, :formula, 5)
+
+    assert remote_git_additions_called, "should have used remote cache when official tap is not installed"
+    assert_equal ["remote-formula"], results.map { |e| e[:query] }
+  end
+
+  def test_force_homebrew_api_skips_installed_official_tap
+    @subject.instance_variable_set(:@selected_taps, nil)
+    @subject.instance_variable_set(:@all_taps, false)
+    @subject.instance_variable_set(:@force_remote, true)
+
+    scan_single_tap_called = false
+
+    @subject.define_singleton_method(:tap_repo_path) { |_tap| Dir.tmpdir }
+    @subject.define_singleton_method(:scan_single_tap) do |_tap, _type, _count|
+      scan_single_tap_called = true
+      []
+    end
+    @subject.define_singleton_method(:remote_git_additions) do |_type, _count|
+      [{ token: "remote-formula", query: "remote-formula", date: "2026-03-30" }]
     end
 
-    output = capture_io do
-      @subject.send(
-        :stream_items_offline,
-        :formula,
-        [{ token: "demo", query: "farmerchris/tap/demo", date: "2026-03-31" }],
-        1,
-        140,
-      )
-    end.first
+    results = @subject.send(:newest_candidates, :formula, 5)
 
-    assert_includes output, "farmerchris/tap/demo"
-    assert_includes output, "-"
+    refute scan_single_tap_called, "should not scan local tap when --force-homebrew-api is set"
+    assert_equal ["remote-formula"], results.map { |e| e[:query] }
   end
 end
+
+Minitest::Test.run_all if Minitest::Test.respond_to?(:run_all)

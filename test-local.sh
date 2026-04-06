@@ -177,7 +177,7 @@ pass "all-taps run"
 run_capture all_taps_debug_output "${CMD[@]}" --all --formula --count=1 -d
 assert_matches_regex "$all_taps_debug_output" 'debug: Running: .*/?brew tap|debug: Running: brew tap' "all-taps run missing tap enumeration"
 assert_matches_regex "$all_taps_debug_output" 'debug: Running: .*/?brew --repo farmerchris/tap|debug: Running: brew --repo farmerchris/tap' "all-taps run missing local tap repo lookup"
-assert_contains "$all_taps_debug_output" "Checking remote git fallback for formula" "all-taps run missing official cache path"
+assert_matches_regex "$all_taps_debug_output" 'Checking remote git fallback for formula|Using installed homebrew/core' "all-taps run missing official cache or installed tap path"
 pass "all-taps combined local and official scan"
 
 run_capture verbose_output "${CMD[@]}" -v --count=1
@@ -189,26 +189,6 @@ run_capture debug_output "${CMD[@]}" -d --count=1
 assert_contains "$debug_output" "debug: Running:" "debug run missing debug command trace"
 assert_contains "$debug_output" "Newest Formulae" "debug run missing formula section"
 pass "debug run"
-
-run_capture offline_output "${CMD[@]}" --offline --count=1
-assert_contains "$offline_output" "Newest Formulae" "offline run missing formula section"
-assert_contains "$offline_output" "Newest Casks" "offline run missing cask section"
-pass "offline official-cache run"
-
-run_capture offline_all_output "${CMD[@]}" --offline --all --count=1
-assert_contains "$offline_all_output" "Newest Formulae" "offline all-taps run missing formula section"
-assert_contains "$offline_all_output" "Newest Casks" "offline all-taps run missing cask section"
-pass "offline all-taps keeps official cache path"
-
-run_capture offline_all_taps_output "${CMD[@]}" --offline --all --formula --count=1
-assert_contains "$offline_all_taps_output" "Newest Formulae" "offline all-taps run missing formula section"
-pass "offline all-taps local scan"
-
-run_capture offline_all_taps_debug_output "${CMD[@]}" --offline --all --formula --count=1 -d
-assert_matches_regex "$offline_all_taps_debug_output" 'debug: Running: .*/?brew tap|debug: Running: brew tap' "offline all-taps run missing tap enumeration"
-assert_matches_regex "$offline_all_taps_debug_output" 'debug: Running: .*/?brew --repo farmerchris/tap|debug: Running: brew --repo farmerchris/tap' "offline all-taps run missing local tap repo lookup"
-assert_contains "$offline_all_taps_debug_output" "Checking remote git fallback for formula" "offline all-taps run missing official cache path"
-pass "offline all-taps combined local and official scan"
 
 run_capture width_output "${CMD[@]}" --width=120 --count=1
 assert_line_count_at_least "$width_output" 6 "width run output too short"

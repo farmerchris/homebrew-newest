@@ -20,7 +20,6 @@ It prints the newest entries in a table with:
 - Supports `--tap` to restrict results to specific taps.
 - Supports `--all` to also scan installed local taps.
 - Supports `--formula` and `--cask` to limit the result type.
-- Supports `--offline` to avoid network fetches.
 - Streams results as metadata becomes available instead of waiting for the full
   result set.
 - Uses batched metadata lookups for better performance.
@@ -60,7 +59,6 @@ brew newest --tap=farmerchris/tap --formula
 brew newest --tap=farmerchris/tap,homebrew-cask-fonts --formula
 brew newest -v --count=1
 brew newest -d --count=1
-brew newest --offline
 ```
 
 Common options:
@@ -72,7 +70,6 @@ Common options:
 - `--tap=TAP[,TAP...]`: restrict search to one or more taps
 - `-v`, `--verbose`: show progress and print untruncated homepage/description cells
 - `-d`, `--debug`: show more detailed subprocess tracing
-- `-o`, `--offline`: avoid network fetches
 
 ## How It Works
 
@@ -81,11 +78,15 @@ Common options:
 - `--tap` searches only the selected installed tap checkouts.
 - `--all` keeps the official cached history and also scans installed local taps.
 - Installed taps are never updated automatically.
-- In offline mode, the command avoids network refreshes and uses whatever history is already available locally or in the cache.
-- If local-tap metadata is missing in offline mode, the row is still shown and missing fields fall back to `-`.
 
-Use `-v` for step-by-step progress, `-d` for more detailed subprocess tracing,
-or `-o`/`--offline` to avoid any network fetches.
+Use `-v` for step-by-step progress or `-d` for more detailed subprocess tracing.
+
+## Custom Homebrew Host
+
+If your Homebrew installation uses a non-default git host (e.g. a company-internal
+mirror), it will pull the `homebrew/core` and `homebrew/cask` taps locally. When
+those taps are present as real git repos, `brew newest` automatically uses their
+local git history instead of cloning from GitHub.
 
 ## Notes
 
