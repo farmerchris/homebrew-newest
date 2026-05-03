@@ -47,6 +47,7 @@ This repository implements the `brew newest` external command.
   - when the official tap is not installed locally, fall back to cloning a bare cache from GitHub
   - initial clone uses depth 200
   - existing cache refresh uses plain `git fetch` and preserves current depth
+  - if the official cache directory exists but is not a valid bare git repo, discard it and reclone instead of repeatedly failing on `git fetch`
   - bare official caches must fetch `refs/heads/main` into the local `refs/heads/main` ref explicitly; fetching only `main` can leave the cache stale while updating only `FETCH_HEAD`
   - deepening increases by 200 at a time up to max depth 2000
   - default mode refreshes only the dedicated official caches, not installed taps

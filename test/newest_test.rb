@@ -125,6 +125,36 @@ class BrewNewestTest < Minitest::Test
     )
   end
 
+  def test_remote_git_additions_reclones_invalid_bare_cache_directory
+    commands = []
+
+    Dir.mktmpdir do |tmpdir|
+      repo = File.join(tmpdir, "formula.git")
+      Dir.mkdir(repo)
+      Dir.mkdir(File.join(repo, "objects"))
+
+      @subject.define_singleton_method(:remote_cache_path) { |_type| repo }
+      @subject.define_singleton_method(:remote_git_log) do |_repo, _type, _count|
+        [{ token: "demo", query: "demo", date: "2026-03-31" }]
+      end
+      @subject.define_singleton_method(:run_command) do |*command|
+        commands << command
+        ["", "", Object.new.tap { |status| status.define_singleton_method(:success?) { true } }]
+      end
+
+      @subject.send(:remote_git_additions, :formula, 1)
+
+      refute Dir.exist?(repo)
+      assert_includes(
+        commands,
+        [
+          "git", "clone", "--bare", "--filter=blob:none", "--single-branch", "--branch", "main",
+          "--no-tags", "--depth=200", "https://github.com/Homebrew/homebrew-core.git", repo,
+        ],
+      )
+    end
+  end
+
   def test_newest_candidates_uses_installed_official_tap_instead_of_remote_cache
     @subject.instance_variable_set(:@selected_taps, nil)
     @subject.instance_variable_set(:@all_taps, false)

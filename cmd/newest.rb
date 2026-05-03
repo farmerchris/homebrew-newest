@@ -201,7 +201,7 @@ module Homebrew
         FileUtils.mkdir_p(File.dirname(repo))
         trace "Checking remote git fallback for #{type}: #{remote}"
 
-        unless valid_git_repo?(repo)
+        unless valid_bare_git_cache?(repo)
           if Dir.exist?(repo)
             trace "Removing invalid remote cache at #{repo}"
             FileUtils.rm_rf(repo)
@@ -240,15 +240,6 @@ module Homebrew
         results
       rescue Errno::ENOENT
         []
-      end
-
-      def valid_git_repo?(repo)
-        return false unless Dir.exist?(repo)
-
-        _, _, status = run_command("git", "-C", repo, "rev-parse", "--git-dir")
-        status.success?
-      rescue Errno::ENOENT
-        false
       end
 
       def remote_git_log(repo, type, count)
@@ -705,6 +696,14 @@ module Homebrew
 
       def remote_cache_refspec
         "+refs/heads/main:refs/heads/main"
+      end
+
+      def valid_bare_git_cache?(repo)
+        return false unless Dir.exist?(repo)
+
+        File.file?(File.join(repo, "HEAD")) &&
+          File.file?(File.join(repo, "config")) &&
+          File.directory?(File.join(repo, "objects"))
       end
 
       def cached_metadata_path(type, query)
