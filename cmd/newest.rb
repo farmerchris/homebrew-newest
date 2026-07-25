@@ -346,10 +346,10 @@ module Homebrew
 
       def build_item(entry, info)
         Item.new(
-          name:     info.fetch(:name),
-          date:     entry.fetch(:date),
+          name: info.fetch(:name),
+          date: entry.fetch(:date),
           homepage: info.fetch(:homepage),
-          desc:     info.fetch(:desc),
+          desc: info.fetch(:desc),
         )
       end
 
@@ -410,10 +410,10 @@ module Homebrew
         json = JSON.parse(json_text)
         key = (type == :formula) ? "formulae" : "casks"
         entry = if json.is_a?(Hash) && json.key?(key)
-          Array(json[key]).first
-        else
-          json
-        end
+                  Array(json[key]).first
+                else
+                  json
+                end
         return if entry.nil?
 
         metadata_hash(type, entry)
@@ -553,11 +553,11 @@ module Homebrew
 
         status = fields.first[0]
         path = case status
-        when "A"
-          fields[1]
-        when "R", "C"
-          fields[2]
-        end
+               when "A"
+                 fields[1]
+               when "R", "C"
+                 fields[2]
+               end
         return if path.blank?
 
         [status, path]
@@ -620,12 +620,12 @@ module Homebrew
       def selected_taps_for_scan(target)
         types = target.is_a?(Array) ? target : [target]
         taps = if explicit_tap_selection?
-          @selected_taps
-        elsif scan_all_taps?
-          brew_taps_for_scan
-        else
-          []
-        end
+                 @selected_taps
+               elsif scan_all_taps?
+                 brew_taps_for_scan
+               else
+                 []
+               end
 
         taps.select do |tap|
           types.any? { |type| tap_supports_type?(tap, type) }
@@ -720,15 +720,15 @@ module Homebrew
       def metadata_hash(type, entry)
         token = (type == :formula) ? entry.fetch("name") : entry.fetch("token")
         display_name = if type == :formula
-          entry.fetch("full_name", token)
-        else
-          entry.fetch("full_token", token)
-        end
+                         entry.fetch("full_name", token)
+                       else
+                         entry.fetch("full_token", token)
+                       end
 
         {
-          name:     display_name,
+          name: display_name,
           homepage: entry.fetch("homepage", "-"),
-          desc:     entry.fetch("desc", "-"),
+          desc: entry.fetch("desc", "-"),
         }
       end
 
