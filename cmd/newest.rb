@@ -201,7 +201,11 @@ module Homebrew
         FileUtils.mkdir_p(File.dirname(repo))
         trace "Checking remote git fallback for #{type}: #{remote}"
 
-        unless Dir.exist?(repo)
+        unless valid_git_repo?(repo)
+          if Dir.exist?(repo)
+            trace "Removing invalid remote cache at #{repo}"
+            FileUtils.rm_rf(repo)
+          end
           trace "Cloning shallow remote cache into #{repo}"
           _, _, status = run_command(
             "git", "clone", "--bare", "--filter=blob:none", "--single-branch", "--branch", "main",
@@ -236,6 +240,15 @@ module Homebrew
         results
       rescue Errno::ENOENT
         []
+      end
+
+      def valid_git_repo?(repo)
+        return false unless Dir.exist?(repo)
+
+        _, _, status = run_command("git", "-C", repo, "rev-parse", "--git-dir")
+        status.success?
+      rescue Errno::ENOENT
+        false
       end
 
       def remote_git_log(repo, type, count)
