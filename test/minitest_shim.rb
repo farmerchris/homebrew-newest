@@ -1,3 +1,4 @@
+# typed: strict
 # frozen_string_literal: true
 
 # Minimal Minitest-compatible shim for environments where the minitest gem
@@ -21,19 +22,19 @@ module Minitest
 
       Minitest::Test.subclasses.each do |klass|
         instance = klass.new
-        test_methods = klass.instance_methods(false).select { |m| m.to_s.start_with?('test_') }
+        test_methods = klass.instance_methods(false).select { |m| m.to_s.start_with?("test_") }
         test_methods.each do |method|
           instance.setup if instance.respond_to?(:setup)
           instance.send(method)
           passed += 1
-          print '.'
+          print "."
         rescue Minitest::Assertion => e
           failed += 1
-          print 'F'
+          print "F"
           warn "\nFAIL: #{klass}##{method}: #{e.message}"
-        rescue StandardError => e
+        rescue => e
           errors += 1
-          print 'E'
+          print "E"
           warn "\nERROR: #{klass}##{method}: #{e.class}: #{e.message}"
           warn e.backtrace.first(5).map { |l| "  #{l}" }.join("\n")
         end

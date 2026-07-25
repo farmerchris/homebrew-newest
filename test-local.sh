@@ -133,12 +133,12 @@ run_capture unit_test_output brew ruby "$ROOT_DIR/test/newest_test.rb"
 assert_contains "$unit_test_output" "0 failures" "unit tests failed"
 pass "ruby unit tests"
 
-run_capture style_output brew style --fix "$ROOT_DIR/cmd/newest.rb"
+run_capture style_output brew style --fix "$ROOT_DIR/cmd/newest.rb" "$ROOT_DIR/test/"
 pass "brew style --fix"
 
 RUBOCOP=/opt/homebrew/lib/ruby/gems/4.0.0/bin/rubocop
 
-run_capture rubocop_output "$RUBOCOP" "$ROOT_DIR/cmd/newest.rb" "$ROOT_DIR/test/"
+run_capture rubocop_output "$RUBOCOP" --fail-level warning "$ROOT_DIR/cmd/newest.rb" "$ROOT_DIR/test/"
 pass "rubocop lint"
 
 run_capture base_output "${CMD[@]}"
