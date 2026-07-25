@@ -6,6 +6,7 @@
 module Minitest
   class Test
     def self.inherited(subclass)
+      super
       (@subclasses ||= []) << subclass
     end
 

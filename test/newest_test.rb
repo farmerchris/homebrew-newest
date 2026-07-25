@@ -20,13 +20,13 @@ class BrewNewestTest < Minitest::Test
   end
 
   def test_parse_git_log_accepts_add_rename_and_copy_using_destination_path
-    stdout = <<~EOS
+    stdout = <<~GIT_LOG
       __BREW_NEWEST_COMMIT__aaa111
       __BREW_NEWEST_DATE__2026-03-31T10:00:00Z
       A\tFormula/plain.rb
       R100\tFormula/old-name.rb\tFormula/renamed.rb
       C100\tFormula/source.rb\tFormula/copied.rb
-    EOS
+    GIT_LOG
 
     results = @subject.send(:parse_git_log, stdout, :formula, 10, 'farmerchris/tap', '/tmp/repo')
 
@@ -41,14 +41,14 @@ class BrewNewestTest < Minitest::Test
   end
 
   def test_parse_git_log_skips_shallow_boundary_commits
-    stdout = <<~EOS
+    stdout = <<~GIT_LOG
       __BREW_NEWEST_COMMIT__boundarysha
       __BREW_NEWEST_DATE__2026-03-31T10:00:00Z
       A\tFormula/old.rb
       __BREW_NEWEST_COMMIT__realsha
       __BREW_NEWEST_DATE__2026-03-30T10:00:00Z
       A\tFormula/new.rb
-    EOS
+    GIT_LOG
 
     @subject.instance_variable_get(:@shallow_boundary_cache)['/tmp/repo'] = Set['boundarysha']
 
@@ -58,13 +58,13 @@ class BrewNewestTest < Minitest::Test
   end
 
   def test_parse_git_log_filters_type_and_dedupes_queries
-    stdout = <<~EOS
+    stdout = <<~GIT_LOG
       __BREW_NEWEST_COMMIT__aaa111
       __BREW_NEWEST_DATE__2026-03-31T10:00:00Z
       A\tFormula/demo.rb
       A\tFormula/demo.rb
       A\tCasks/not-a-formula.rb
-    EOS
+    GIT_LOG
 
     results = @subject.send(:parse_git_log, stdout, :formula, 10, 'farmerchris/tap', '/tmp/repo')
 

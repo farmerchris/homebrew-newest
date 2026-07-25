@@ -136,6 +136,11 @@ pass "ruby unit tests"
 run_capture style_output brew style --fix "$ROOT_DIR/cmd/newest.rb"
 pass "brew style --fix"
 
+RUBOCOP=/opt/homebrew/lib/ruby/gems/4.0.0/bin/rubocop
+
+run_capture rubocop_output "$RUBOCOP" "$ROOT_DIR/cmd/newest.rb" "$ROOT_DIR/test/"
+pass "rubocop lint"
+
 run_capture base_output "${CMD[@]}"
 assert_contains "$base_output" "Newest Formulae" "base run missing formula section"
 assert_contains "$base_output" "Newest Casks" "base run missing cask section"

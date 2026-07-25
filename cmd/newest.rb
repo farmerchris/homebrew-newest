@@ -1,40 +1,40 @@
 # typed: strict
 # frozen_string_literal: true
 
-require 'abstract_command'
-require 'fileutils'
-require 'json'
-require 'open3'
-require 'tmpdir'
+require "abstract_command"
+require "fileutils"
+require "json"
+require "open3"
+require "tmpdir"
 
 module Homebrew
   module Cmd
     # List newly added formulae and casks.
     class Newest < AbstractCommand
       cmd_args do
-        description <<~EOS
+        description <<~DESCRIPTION
           List the newest formulae and casks in a table with their name, add date,
           homepage, and description.
-        EOS
+        DESCRIPTION
 
-        switch '--formula',
-               description: 'List only formulae.'
-        switch '--cask',
-               description: 'List only casks.'
-        switch '-v', '--verbose',
-               description: 'Print progress while gathering newest entries.'
-        switch '-d', '--debug',
-               description: 'Print detailed progress and subprocess failures.'
-        switch '--force-homebrew-api',
-               description: 'Force use of the remote git cache for official taps, even if they are installed locally.'
-        switch '--all',
-               description: 'Scan all installed taps instead of only the official caches.'
-        comma_array '--tap=',
-                    description: 'Restrict results to the specified tap or comma-separated taps.'
-        flag '-n', '--count=',
-             description: 'Number of entries to show for each selected type.'
-        flag '--width=',
-             description: 'Target table width. Defaults to $COLUMNS or 140.'
+        switch "--formula",
+               description: "List only formulae."
+        switch "--cask",
+               description: "List only casks."
+        switch "-v", "--verbose",
+               description: "Print progress while gathering newest entries."
+        switch "-d", "--debug",
+               description: "Print detailed progress and subprocess failures."
+        switch "--force-homebrew-api",
+               description: "Force use of the remote git cache for official taps, even if they are installed locally."
+        switch "--all",
+               description: "Scan all installed taps instead of only the official caches."
+        comma_array "--tap=",
+                    description: "Restrict results to the specified tap or comma-separated taps."
+        flag "-n", "--count=",
+             description: "Number of entries to show for each selected type."
+        flag "--width=",
+             description: "Target table width. Defaults to $COLUMNS or 140."
       end
 
       def run
@@ -57,8 +57,8 @@ module Homebrew
       LOCAL_SCAN_WORKERS = 4
       INFO_WORKERS = 3
       INFO_BATCH_SIZE = 8
-      DATE_MARKER = '__BREW_NEWEST_DATE__'
-      COMMIT_MARKER = '__BREW_NEWEST_COMMIT__'
+      DATE_MARKER = "__BREW_NEWEST_DATE__"
+      COMMIT_MARKER = "__BREW_NEWEST_COMMIT__"
       Item = Struct.new(:name, :date, :homepage, :desc)
 
       def run(args)
@@ -72,17 +72,17 @@ module Homebrew
         @shallow_boundary_cache = {}
 
         count = Integer(args.count || DEFAULT_COUNT)
-        odie '--count must be greater than 0' if count <= 0
+        odie "--count must be greater than 0" if count <= 0
 
         width = args.width ? Integer(args.width) : default_width
-        odie '--width must be at least 80' if width < 80
+        odie "--width must be at least 80" if width < 80
 
         selections = selected_types(args)
         prime_shared_state(selections)
         additions_by_type = preload_additions(selections, count)
         available_types = selections.select { |type| additions_by_type.fetch(type).any? }
 
-        odie 'No matching formulae or casks found for the selected taps.' if available_types.empty?
+        odie "No matching formulae or casks found for the selected taps." if available_types.empty?
 
         available_types.each_with_index do |type, index|
           puts if index.positive?
@@ -100,7 +100,7 @@ module Homebrew
         selected = []
         selected << :formula if args.formula?
         selected << :cask if args.cask?
-        selected = %i[formula cask] if selected.empty?
+        selected = [:formula, :cask] if selected.empty?
         selected
       end
 
@@ -170,13 +170,13 @@ module Homebrew
               trace "Checking local #{type} repo for #{tap}: #{repo.inspect}"
               next if !repo || !File.directory?(repo)
 
-              scope = type == :formula ? 'Formula' : 'Casks'
+              scope = (type == :formula) ? "Formula" : "Casks"
               next unless File.directory?(File.join(repo, scope))
 
               stdout, _, status = run_command(
-                'git', '-C', repo, 'log', "--max-count=#{INITIAL_LOCAL_LOG_COUNT}",
-                '--diff-filter=ARC', '--name-status',
-                "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", '--', scope
+                "git", "-C", repo, "log", "--max-count=#{INITIAL_LOCAL_LOG_COUNT}",
+                "--diff-filter=ARC", "--name-status",
+                "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
               )
               next unless status.success?
 
@@ -208,16 +208,16 @@ module Homebrew
           end
           trace "Cloning shallow remote cache into #{repo}"
           _, _, status = run_command(
-            'git', 'clone', '--bare', '--filter=blob:none', '--single-branch', '--branch', 'main',
-            '--no-tags', "--depth=#{INITIAL_REMOTE_DEPTH}", remote, repo
+            "git", "clone", "--bare", "--filter=blob:none", "--single-branch", "--branch", "main",
+            "--no-tags", "--depth=#{INITIAL_REMOTE_DEPTH}", remote, repo
           )
           return [] unless status.success?
         end
 
         trace "Refreshing remote git cache for #{type}"
         _, _, status = run_command(
-          'git', '-C', repo, 'fetch', '--force', '--filter=blob:none', '--no-tags',
-          'origin', refspec
+          "git", "-C", repo, "fetch", "--force", "--filter=blob:none", "--no-tags",
+          "origin", refspec
         )
         return [] unless status.success?
 
@@ -228,8 +228,8 @@ module Homebrew
           next_depth = [current_depth + REMOTE_DEEPEN_STEP, MAX_REMOTE_DEPTH].min
           trace "Deepening remote git cache for #{type} to depth #{next_depth}"
           _, _, status = run_command(
-            'git', '-C', repo, 'fetch', "--deepen=#{REMOTE_DEEPEN_STEP}", '--filter=blob:none',
-            '--no-tags', 'origin', refspec
+            "git", "-C", repo, "fetch", "--deepen=#{REMOTE_DEEPEN_STEP}", "--filter=blob:none",
+            "--no-tags", "origin", refspec
           )
           break unless status.success?
 
@@ -243,10 +243,10 @@ module Homebrew
       end
 
       def remote_git_log(repo, type, count)
-        scope = type == :formula ? 'Formula' : 'Casks'
+        scope = (type == :formula) ? "Formula" : "Casks"
         stdout, _, status = run_command(
-          'git', '-C', repo, 'log', '--diff-filter=ARC', '--name-status',
-          "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", '--', scope
+          "git", "-C", repo, "log", "--diff-filter=ARC", "--name-status",
+          "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
         )
         return [] unless status.success?
 
@@ -320,16 +320,16 @@ module Homebrew
       end
 
       def fetch_metadata_batch_uncached(type, names)
-        flag = type == :formula ? '--formula' : '--cask'
-        trace "Fetching metadata batch for #{type} (#{names.length}): #{names.join(', ')}"
-        stdout, _, status = run_command(brew_binary, 'info', '--json=v2', flag, *names)
+        flag = (type == :formula) ? "--formula" : "--cask"
+        trace "Fetching metadata batch for #{type} (#{names.length}): #{names.join(", ")}"
+        stdout, _, status = run_command(brew_binary, "info", "--json=v2", flag, *names)
         return parse_metadata_collection(type, stdout) if status.success?
 
         if names.length == 1
           fallback = fallback_query_name(names.first)
           if fallback && fallback != names.first
             trace "Retrying metadata lookup for #{type} with fallback query: #{fallback}"
-            stdout, _, status = run_command(brew_binary, 'info', '--json=v2', flag, fallback)
+            stdout, _, status = run_command(brew_binary, "info", "--json=v2", flag, fallback)
             return parse_metadata_collection(type, stdout) if status.success?
           end
 
@@ -346,10 +346,10 @@ module Homebrew
 
       def build_item(entry, info)
         Item.new(
-          name: info.fetch(:name),
-          date: entry.fetch(:date),
+          name:     info.fetch(:name),
+          date:     entry.fetch(:date),
           homepage: info.fetch(:homepage),
-          desc: info.fetch(:desc)
+          desc:     info.fetch(:desc),
         )
       end
 
@@ -380,7 +380,7 @@ module Homebrew
           path = aggregate_cached_metadata_path(type)
           if File.exist?(path)
             raw = JSON.parse(File.read(path))
-            payload = raw['payload']
+            payload = raw["payload"]
 
             if payload.nil?
               {}
@@ -400,7 +400,7 @@ module Homebrew
 
       def parse_metadata_collection(type, json_text)
         json = JSON.parse(json_text)
-        key = type == :formula ? 'formulae' : 'casks'
+        key = (type == :formula) ? "formulae" : "casks"
         Array(json[key]).each_with_object({}) do |entry, map|
           index_metadata_entry(type, entry, map)
         end
@@ -408,12 +408,12 @@ module Homebrew
 
       def parse_metadata_json(type, json_text)
         json = JSON.parse(json_text)
-        key = type == :formula ? 'formulae' : 'casks'
+        key = (type == :formula) ? "formulae" : "casks"
         entry = if json.is_a?(Hash) && json.key?(key)
-                  Array(json[key]).first
-                else
-                  json
-                end
+          Array(json[key]).first
+        else
+          json
+        end
         return if entry.nil?
 
         metadata_hash(type, entry)
@@ -421,8 +421,8 @@ module Homebrew
 
       def print_table_header(width)
         widths = column_widths(width)
-        puts row('Name', 'Date', 'Homepage', 'Description', *widths)
-        puts row('-' * widths[0], '-' * widths[1], '-' * widths[2], '-' * widths[3], *widths)
+        puts row("Name", "Date", "Homepage", "Description", *widths)
+        puts row("-" * widths[0], "-" * widths[1], "-" * widths[2], "-" * widths[3], *widths)
       end
 
       def format_item_row(item, width)
@@ -432,14 +432,14 @@ module Homebrew
           item.date,
           format_cell(item.homepage, widths[2]),
           format_cell(item.desc, widths[3]),
-          *widths
+          *widths,
         )
       end
 
       def column_widths(width)
         name_width = 30
         date_width = 10
-        separator = '  '
+        separator = "  "
         fixed = name_width + date_width + (separator.length * 3)
         remaining = [width - fixed, 40].max
         home_width = (remaining / 2).clamp(32, 56)
@@ -468,19 +468,19 @@ module Homebrew
           name,
           date,
           homepage,
-          desc
+          desc,
         ).rstrip
       end
 
       def truncate(text, width)
-        value = text.to_s.gsub(/\s+/, ' ').strip
+        value = text.to_s.gsub(/\s+/, " ").strip
         return value if value.length <= width
 
         "#{value[0, width - 3]}..."
       end
 
       def format_cell(text, width)
-        value = text.to_s.gsub(/\s+/, ' ').strip
+        value = text.to_s.gsub(/\s+/, " ").strip
         return value if @verbose
 
         truncate(value, width)
@@ -537,14 +537,14 @@ module Homebrew
 
       def sort_additions_by_date(additions)
         additions.sort_by do |entry|
-          [entry[:date].to_s.empty? ? 1 : 0, entry[:date].to_s.empty? ? '' : -entry[:date].delete('-').to_i]
+          [entry[:date].to_s.empty? ? 1 : 0, entry[:date].to_s.empty? ? "" : -entry[:date].delete("-").to_i]
         end
       end
 
       def token_from_path(path)
-        return unless path.end_with?('.rb')
+        return unless path.end_with?(".rb")
 
-        File.basename(path, '.rb')
+        File.basename(path, ".rb")
       end
 
       def parse_name_status_line(line)
@@ -553,11 +553,11 @@ module Homebrew
 
         status = fields.first[0]
         path = case status
-               when 'A'
-                 fields[1]
-               when 'R', 'C'
-                 fields[2]
-               end
+        when "A"
+          fields[1]
+        when "R", "C"
+          fields[2]
+        end
         return if path.blank?
 
         [status, path]
@@ -565,8 +565,8 @@ module Homebrew
 
       def tap_query_name(tap, type, token)
         return token if tap.nil?
-        return token if type == :formula && tap.casecmp('homebrew/core').zero?
-        return token if type == :cask && tap.casecmp('homebrew/cask').zero?
+        return token if type == :formula && tap.casecmp("homebrew/core").zero?
+        return token if type == :cask && tap.casecmp("homebrew/cask").zero?
 
         "#{tap}/#{token}"
       end
@@ -581,9 +581,9 @@ module Homebrew
 
       def path_matches_type?(path, type)
         if type == :formula
-          path.start_with?('Formula/')
+          path.start_with?("Formula/")
         else
-          path.start_with?('Casks/')
+          path.start_with?("Casks/")
         end
       end
 
@@ -620,12 +620,12 @@ module Homebrew
       def selected_taps_for_scan(target)
         types = target.is_a?(Array) ? target : [target]
         taps = if explicit_tap_selection?
-                 @selected_taps
-               elsif scan_all_taps?
-                 brew_taps_for_scan
-               else
-                 []
-               end
+          @selected_taps
+        elsif scan_all_taps?
+          brew_taps_for_scan
+        else
+          []
+        end
 
         taps.select do |tap|
           types.any? { |type| tap_supports_type?(tap, type) }
@@ -635,18 +635,18 @@ module Homebrew
       def tap_supports_type?(tap, type)
         return true if type == :formula
 
-        tap.casecmp('homebrew/core').nonzero?
+        tap.casecmp("homebrew/core").nonzero?
       end
 
       def official_tap_name(type)
-        type == :formula ? 'homebrew/core' : 'homebrew/cask'
+        (type == :formula) ? "homebrew/core" : "homebrew/cask"
       end
 
       def scan_single_tap(tap, type, count)
         repo = tap_repo_path(tap)
         return [] if !repo || !File.directory?(repo)
 
-        scope = type == :formula ? 'Formula' : 'Casks'
+        scope = (type == :formula) ? "Formula" : "Casks"
         return [] unless File.directory?(File.join(repo, scope))
 
         log_count = INITIAL_LOCAL_LOG_COUNT
@@ -665,9 +665,9 @@ module Homebrew
 
       def local_git_log(repo, type, count, log_count, tap, scope)
         stdout, _, status = run_command(
-          'git', '-C', repo, 'log', "--max-count=#{log_count}",
-          '--diff-filter=ARC', '--name-status',
-          "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", '--', scope
+          "git", "-C", repo, "log", "--max-count=#{log_count}",
+          "--diff-filter=ARC", "--name-status",
+          "--format=#{COMMIT_MARKER}%H%n#{DATE_MARKER}%aI", "--", scope
         )
         return [] unless status.success?
 
@@ -677,64 +677,64 @@ module Homebrew
       def brew_taps_for_scan
         @cache_mutex.synchronize do
           @brew_taps_for_scan ||= begin
-            stdout, _, status = run_command(brew_binary, 'tap')
+            stdout, _, status = run_command(brew_binary, "tap")
             taps = status.success? ? stdout.lines.map(&:strip).reject(&:empty?) : []
-            taps << 'homebrew/core'
-            taps << 'homebrew/cask'
+            taps << "homebrew/core"
+            taps << "homebrew/cask"
             taps.uniq
           end
         end
       end
 
       def remote_git_url(type)
-        type == :formula ? 'https://github.com/Homebrew/homebrew-core.git' : 'https://github.com/Homebrew/homebrew-cask.git'
+        (type == :formula) ? "https://github.com/Homebrew/homebrew-core.git" : "https://github.com/Homebrew/homebrew-cask.git"
       end
 
       def remote_cache_path(type)
-        File.join(Dir.tmpdir, 'brew-newest-cache', "#{type}.git")
+        File.join(Dir.tmpdir, "brew-newest-cache", "#{type}.git")
       end
 
       def remote_cache_refspec
-        '+refs/heads/main:refs/heads/main'
+        "+refs/heads/main:refs/heads/main"
       end
 
       def valid_bare_git_cache?(repo)
         return false unless Dir.exist?(repo)
 
-        File.file?(File.join(repo, 'HEAD')) &&
-          File.file?(File.join(repo, 'config')) &&
-          File.directory?(File.join(repo, 'objects'))
+        File.file?(File.join(repo, "HEAD")) &&
+          File.file?(File.join(repo, "config")) &&
+          File.directory?(File.join(repo, "objects"))
       end
 
       def cached_metadata_path(type, query)
-        dir = type == :formula ? 'formula' : 'cask'
-        token = query.to_s.split('/').last
+        dir = (type == :formula) ? "formula" : "cask"
+        token = query.to_s.split("/").last
         File.expand_path("~/Library/Caches/Homebrew/api/#{dir}/#{token}.json")
       end
 
       def aggregate_cached_metadata_path(type)
-        name = type == :formula ? 'formula.jws.json' : 'cask.jws.json'
+        name = (type == :formula) ? "formula.jws.json" : "cask.jws.json"
         File.expand_path("~/Library/Caches/Homebrew/api/#{name}")
       end
 
       def metadata_hash(type, entry)
-        token = type == :formula ? entry.fetch('name') : entry.fetch('token')
+        token = (type == :formula) ? entry.fetch("name") : entry.fetch("token")
         display_name = if type == :formula
-                         entry.fetch('full_name', token)
-                       else
-                         entry.fetch('full_token', token)
-                       end
+          entry.fetch("full_name", token)
+        else
+          entry.fetch("full_token", token)
+        end
 
         {
-          name: display_name,
-          homepage: entry.fetch('homepage', '-'),
-          desc: entry.fetch('desc', '-')
+          name:     display_name,
+          homepage: entry.fetch("homepage", "-"),
+          desc:     entry.fetch("desc", "-"),
         }
       end
 
       def index_metadata_entry(type, entry, map)
-        token = type == :formula ? entry.fetch('name') : entry.fetch('token')
-        full_name = type == :formula ? entry.fetch('full_name', token) : entry.fetch('full_token', token)
+        token = (type == :formula) ? entry.fetch("name") : entry.fetch("token")
+        full_name = (type == :formula) ? entry.fetch("full_name", token) : entry.fetch("full_token", token)
         metadata = metadata_hash(type, entry)
 
         map[token] = metadata
@@ -742,21 +742,21 @@ module Homebrew
       end
 
       def fallback_query_name(query)
-        return unless query.include?('/')
+        return unless query.include?("/")
 
-        query.split('/').last
+        query.split("/").last
       end
 
       def brew_binary
-        ENV['HOMEBREW_BREW_FILE'] || 'brew'
+        ENV["HOMEBREW_BREW_FILE"] || "brew"
       end
 
       def title_for(type)
-        type == :formula ? 'Newest Formulae' : 'Newest Casks'
+        (type == :formula) ? "Newest Formulae" : "Newest Casks"
       end
 
       def default_width
-        columns = ENV['COLUMNS'].to_i
+        columns = ENV["COLUMNS"].to_i
         columns.positive? ? columns : DEFAULT_WIDTH
       end
 
@@ -769,7 +769,7 @@ module Homebrew
       end
 
       def run_command(*command)
-        debug "Running: #{command.join(' ')}"
+        debug "Running: #{command.join(" ")}"
         stdout, stderr, status = Open3.capture3(*command)
         debug "Exit #{status.exitstatus}: #{stderr.strip}" if @debug && !status.success? && !stderr.to_s.strip.empty?
         [stdout, stderr, status]
@@ -779,7 +779,7 @@ module Homebrew
         git_dir = git_dir_path(repo)
         return Set.new if git_dir.nil?
 
-        shallow_path = File.join(git_dir, 'shallow')
+        shallow_path = File.join(git_dir, "shallow")
         return Set.new unless File.exist?(shallow_path)
 
         Set.new(File.readlines(shallow_path, chomp: true).reject(&:empty?))
@@ -788,7 +788,7 @@ module Homebrew
       end
 
       def git_dir_path(repo)
-        dot_git = File.join(repo, '.git')
+        dot_git = File.join(repo, ".git")
         return dot_git if File.directory?(dot_git)
 
         if File.file?(dot_git)
@@ -798,7 +798,7 @@ module Homebrew
           return File.expand_path(gitdir, repo)
         end
 
-        return repo if File.directory?(File.join(repo, 'objects')) && File.directory?(File.join(repo, 'refs'))
+        return repo if File.directory?(File.join(repo, "objects")) && File.directory?(File.join(repo, "refs"))
 
         nil
       rescue Errno::ENOENT
@@ -806,7 +806,7 @@ module Homebrew
       end
 
       def load_tap_repo_path(tap)
-        stdout, _, status = run_command(brew_binary, '--repo', tap)
+        stdout, _, status = run_command(brew_binary, "--repo", tap)
         return unless status.success?
 
         stdout.strip
