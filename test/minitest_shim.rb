@@ -20,28 +20,28 @@ module Minitest
 
       Minitest::Test.subclasses.each do |klass|
         instance = klass.new
-        test_methods = klass.instance_methods(false).select { |m| m.to_s.start_with?("test_") }
+        test_methods = klass.instance_methods(false).select { |m| m.to_s.start_with?('test_') }
         test_methods.each do |method|
           instance.setup if instance.respond_to?(:setup)
           instance.send(method)
           passed += 1
-          print "."
+          print '.'
         rescue Minitest::Assertion => e
           failed += 1
-          print "F"
-          $stderr.puts "\nFAIL: #{klass}##{method}: #{e.message}"
-        rescue => e
+          print 'F'
+          warn "\nFAIL: #{klass}##{method}: #{e.message}"
+        rescue StandardError => e
           errors += 1
-          print "E"
-          $stderr.puts "\nERROR: #{klass}##{method}: #{e.class}: #{e.message}"
-          $stderr.puts e.backtrace.first(5).map { |l| "  #{l}" }.join("\n")
+          print 'E'
+          warn "\nERROR: #{klass}##{method}: #{e.class}: #{e.message}"
+          warn e.backtrace.first(5).map { |l| "  #{l}" }.join("\n")
         end
       end
 
       puts
       total = passed + failed + errors
       puts "#{total} tests, #{failed} failures, #{errors} errors"
-      exit(1) if failed > 0 || errors > 0
+      exit(1) if failed.positive? || errors.positive?
     end
 
     class Assertion < RuntimeError; end

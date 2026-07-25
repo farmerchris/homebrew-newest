@@ -1,10 +1,12 @@
+# frozen_string_literal: true
+
 begin
-  require "minitest/autorun"
+  require 'minitest/autorun'
 rescue LoadError
-  require "stringio"
-  require_relative "minitest_shim"
+  require 'stringio'
+  require_relative 'minitest_shim'
 end
-require_relative "../cmd/newest"
+require_relative '../cmd/newest'
 
 class BrewNewestTest < Minitest::Test
   def setup
@@ -26,15 +28,15 @@ class BrewNewestTest < Minitest::Test
       C100\tFormula/source.rb\tFormula/copied.rb
     EOS
 
-    results = @subject.send(:parse_git_log, stdout, :formula, 10, "farmerchris/tap", "/tmp/repo")
+    results = @subject.send(:parse_git_log, stdout, :formula, 10, 'farmerchris/tap', '/tmp/repo')
 
     assert_equal(
       [
-        { token: "plain", query: "farmerchris/tap/plain", date: "2026-03-31" },
-        { token: "renamed", query: "farmerchris/tap/renamed", date: "2026-03-31" },
-        { token: "copied", query: "farmerchris/tap/copied", date: "2026-03-31" },
+        { token: 'plain', query: 'farmerchris/tap/plain', date: '2026-03-31' },
+        { token: 'renamed', query: 'farmerchris/tap/renamed', date: '2026-03-31' },
+        { token: 'copied', query: 'farmerchris/tap/copied', date: '2026-03-31' }
       ],
-      results,
+      results
     )
   end
 
@@ -48,11 +50,11 @@ class BrewNewestTest < Minitest::Test
       A\tFormula/new.rb
     EOS
 
-    @subject.instance_variable_get(:@shallow_boundary_cache)["/tmp/repo"] = Set["boundarysha"]
+    @subject.instance_variable_get(:@shallow_boundary_cache)['/tmp/repo'] = Set['boundarysha']
 
-    results = @subject.send(:parse_git_log, stdout, :formula, 10, "farmerchris/tap", "/tmp/repo")
+    results = @subject.send(:parse_git_log, stdout, :formula, 10, 'farmerchris/tap', '/tmp/repo')
 
-    assert_equal([{ token: "new", query: "farmerchris/tap/new", date: "2026-03-30" }], results)
+    assert_equal([{ token: 'new', query: 'farmerchris/tap/new', date: '2026-03-30' }], results)
   end
 
   def test_parse_git_log_filters_type_and_dedupes_queries
@@ -64,9 +66,9 @@ class BrewNewestTest < Minitest::Test
       A\tCasks/not-a-formula.rb
     EOS
 
-    results = @subject.send(:parse_git_log, stdout, :formula, 10, "farmerchris/tap", "/tmp/repo")
+    results = @subject.send(:parse_git_log, stdout, :formula, 10, 'farmerchris/tap', '/tmp/repo')
 
-    assert_equal([{ token: "demo", query: "farmerchris/tap/demo", date: "2026-03-31" }], results)
+    assert_equal([{ token: 'demo', query: 'farmerchris/tap/demo', date: '2026-03-31' }], results)
   end
 
   def test_tap_selection_modes
@@ -75,7 +77,7 @@ class BrewNewestTest < Minitest::Test
     refute @subject.send(:scan_local_taps?)
     assert @subject.send(:use_official_cache?)
 
-    @subject.instance_variable_set(:@selected_taps, ["farmerchris/tap"])
+    @subject.instance_variable_set(:@selected_taps, ['farmerchris/tap'])
     refute @subject.send(:use_official_cache?)
     assert @subject.send(:scan_local_taps?)
 
@@ -91,27 +93,27 @@ class BrewNewestTest < Minitest::Test
     @subject.define_singleton_method(:tap_repo_path) { |_tap| nil }
 
     def @subject.local_additions(_type, _count)
-      [{ token: "local", query: "farmerchris/tap/local", date: "2026-03-31" }]
+      [{ token: 'local', query: 'farmerchris/tap/local', date: '2026-03-31' }]
     end
 
     def @subject.remote_git_additions(_type, _count)
-      [{ token: "official", query: "official", date: "2026-03-30" }]
+      [{ token: 'official', query: 'official', date: '2026-03-30' }]
     end
 
     results = @subject.send(:newest_candidates, :formula, 5)
 
-    assert_equal(["farmerchris/tap/local", "official"], results.map { |entry| entry[:query] })
+    assert_equal(['farmerchris/tap/local', 'official'], results.map { |entry| entry[:query] })
   end
 
   def test_remote_git_additions_fetches_into_local_main_ref_for_bare_cache
     commands = []
-    @subject.define_singleton_method(:remote_cache_path) { |_type| "/tmp/remote.git" }
+    @subject.define_singleton_method(:remote_cache_path) { |_type| '/tmp/remote.git' }
     @subject.define_singleton_method(:remote_git_log) do |_repo, _type, _count|
-      [{ token: "demo", query: "demo", date: "2026-03-31" }]
+      [{ token: 'demo', query: 'demo', date: '2026-03-31' }]
     end
     @subject.define_singleton_method(:run_command) do |*command|
       commands << command
-      ["", "", Object.new.tap { |status| status.define_singleton_method(:success?) { true } }]
+      ['', '', Object.new.tap { |status| status.define_singleton_method(:success?) { true } }]
     end
 
     @subject.send(:remote_git_additions, :formula, 1)
@@ -119,9 +121,9 @@ class BrewNewestTest < Minitest::Test
     assert_includes(
       commands,
       [
-        "git", "-C", "/tmp/remote.git", "fetch", "--force", "--filter=blob:none", "--no-tags",
-        "origin", "+refs/heads/main:refs/heads/main",
-      ],
+        'git', '-C', '/tmp/remote.git', 'fetch', '--force', '--filter=blob:none', '--no-tags',
+        'origin', '+refs/heads/main:refs/heads/main'
+      ]
     )
   end
 
@@ -129,17 +131,17 @@ class BrewNewestTest < Minitest::Test
     commands = []
 
     Dir.mktmpdir do |tmpdir|
-      repo = File.join(tmpdir, "formula.git")
+      repo = File.join(tmpdir, 'formula.git')
       Dir.mkdir(repo)
-      Dir.mkdir(File.join(repo, "objects"))
+      Dir.mkdir(File.join(repo, 'objects'))
 
       @subject.define_singleton_method(:remote_cache_path) { |_type| repo }
       @subject.define_singleton_method(:remote_git_log) do |_repo, _type, _count|
-        [{ token: "demo", query: "demo", date: "2026-03-31" }]
+        [{ token: 'demo', query: 'demo', date: '2026-03-31' }]
       end
       @subject.define_singleton_method(:run_command) do |*command|
         commands << command
-        ["", "", Object.new.tap { |status| status.define_singleton_method(:success?) { true } }]
+        ['', '', Object.new.tap { |status| status.define_singleton_method(:success?) { true } }]
       end
 
       @subject.send(:remote_git_additions, :formula, 1)
@@ -148,9 +150,9 @@ class BrewNewestTest < Minitest::Test
       assert_includes(
         commands,
         [
-          "git", "clone", "--bare", "--filter=blob:none", "--single-branch", "--branch", "main",
-          "--no-tags", "--depth=200", "https://github.com/Homebrew/homebrew-core.git", repo,
-        ],
+          'git', 'clone', '--bare', '--filter=blob:none', '--single-branch', '--branch', 'main',
+          '--no-tags', '--depth=200', 'https://github.com/Homebrew/homebrew-core.git', repo
+        ]
       )
     end
   end
@@ -165,7 +167,7 @@ class BrewNewestTest < Minitest::Test
     @subject.define_singleton_method(:tap_repo_path) { |_tap| Dir.tmpdir }
     @subject.define_singleton_method(:scan_single_tap) do |_tap, _type, _count|
       scan_single_tap_called = true
-      [{ token: "local-formula", query: "local-formula", date: "2026-03-31" }]
+      [{ token: 'local-formula', query: 'local-formula', date: '2026-03-31' }]
     end
     @subject.define_singleton_method(:remote_git_additions) do |_type, _count|
       remote_git_additions_called = true
@@ -174,9 +176,9 @@ class BrewNewestTest < Minitest::Test
 
     results = @subject.send(:newest_candidates, :formula, 5)
 
-    assert scan_single_tap_called, "should have scanned the installed official tap"
-    refute remote_git_additions_called, "should not have used remote cache when official tap is installed"
-    assert_equal ["local-formula"], results.map { |e| e[:query] }
+    assert scan_single_tap_called, 'should have scanned the installed official tap'
+    refute remote_git_additions_called, 'should not have used remote cache when official tap is installed'
+    assert_equal(['local-formula'], results.map { |e| e[:query] })
   end
 
   def test_newest_candidates_falls_back_to_remote_cache_when_official_tap_not_installed
@@ -188,13 +190,13 @@ class BrewNewestTest < Minitest::Test
     @subject.define_singleton_method(:tap_repo_path) { |_tap| nil }
     @subject.define_singleton_method(:remote_git_additions) do |_type, _count|
       remote_git_additions_called = true
-      [{ token: "remote-formula", query: "remote-formula", date: "2026-03-30" }]
+      [{ token: 'remote-formula', query: 'remote-formula', date: '2026-03-30' }]
     end
 
     results = @subject.send(:newest_candidates, :formula, 5)
 
-    assert remote_git_additions_called, "should have used remote cache when official tap is not installed"
-    assert_equal ["remote-formula"], results.map { |e| e[:query] }
+    assert remote_git_additions_called, 'should have used remote cache when official tap is not installed'
+    assert_equal(['remote-formula'], results.map { |e| e[:query] })
   end
 
   def test_force_homebrew_api_skips_installed_official_tap
@@ -210,13 +212,13 @@ class BrewNewestTest < Minitest::Test
       []
     end
     @subject.define_singleton_method(:remote_git_additions) do |_type, _count|
-      [{ token: "remote-formula", query: "remote-formula", date: "2026-03-30" }]
+      [{ token: 'remote-formula', query: 'remote-formula', date: '2026-03-30' }]
     end
 
     results = @subject.send(:newest_candidates, :formula, 5)
 
-    refute scan_single_tap_called, "should not scan local tap when --force-homebrew-api is set"
-    assert_equal ["remote-formula"], results.map { |e| e[:query] }
+    refute scan_single_tap_called, 'should not scan local tap when --force-homebrew-api is set'
+    assert_equal(['remote-formula'], results.map { |e| e[:query] })
   end
 end
 
